@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from BigTracker.predictor import PredictorModel
-from BigTracker.state import BigTrackState, TrackerPredictionState
+from BigTracker.state import BigTrackState, SearchCandidate, TrackerPredictionState
 from BigTracker.types import FrameLike, Point, Size, TrackerMode
 
 
@@ -22,6 +22,27 @@ class KalmanPredictorConfig:
     default_covariance: Covariance2x2 = (10.0, 0.0, 0.0, 10.0)
     min_size: Size = (1.0, 1.0)
     reject_uncertainty_growth: float = 1.5
+    normal_offsets: Sequence[Point] = ((0.0, 0.0),)
+    uncertain_offsets: Sequence[Point] = (
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+    )
+    recovery_offsets: Sequence[Point] = (
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (1.0, 1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (-1.0, -1.0),
+    )
+    uncertainty_radius_scale: float = 0.5
+    min_candidate_confidence: float = 0.05
 
 
 class KalmanPredictorModel(PredictorModel):
@@ -31,7 +52,7 @@ class KalmanPredictorModel(PredictorModel):
         """Store Kalman parameters used by predict and update operations."""
         self.config = config or KalmanPredictorConfig()
 
-    def predict_state(self, state: BigTrackState, frame: FrameLike) -> TrackerPredictionState:
+    def predict(self, state: BigTrackState, frame: FrameLike) -> TrackerPredictionState:
         """Predict position, size, velocity, covariance, and uncertainty."""
         dt = self._frame_dt(state, frame)
         prediction = state.prediction
@@ -80,6 +101,32 @@ class KalmanPredictorModel(PredictorModel):
             last_score=prediction.last_score,
             uncertainty=self._uncertainty_from_covariances(metadata, state.mode),
             metadata=metadata,
+        )
+
+    def make_candidates(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        frame: FrameLike,
+    ) -> Sequence[SearchCandidate]:
+        """Create search-center candidates around the Kalman prediction."""
+        offsets = self._offsets_for_mode(state.mode)
+        radius = self._candidate_radius(prediction)
+        confidence = self._candidate_confidence(prediction)
+
+        return tuple(
+            SearchCandidate(
+                candidate_id=f"{state.mode.value.lower()}_{index}",
+                search_center=(
+                    prediction.target_pos[0] + offset[0] * radius,
+                    prediction.target_pos[1] + offset[1] * radius,
+                ),
+                predicted_target_size=prediction.target_size,
+                prediction_confidence=confidence,
+                motion_uncertainty=prediction.uncertainty,
+                reason=self._candidate_reason(state.mode, offset),
+            )
+            for index, offset in enumerate(offsets)
         )
 
     def predict_position(self, state: BigTrackState, frame: FrameLike) -> Point:
@@ -239,6 +286,31 @@ class KalmanPredictorModel(PredictorModel):
             return float(frame.idx - previous_idx)
 
         return 1.0
+
+    def _offsets_for_mode(self, mode: TrackerMode) -> Sequence[Point]:
+        """Choose candidate layout from tracker mode."""
+        if mode in (TrackerMode.RECOVERY, TrackerMode.LOST):
+            return self.config.recovery_offsets
+        if mode in (TrackerMode.UNCERTAIN, TrackerMode.OCCLUDED):
+            return self.config.uncertain_offsets
+        return self.config.normal_offsets
+
+    def _candidate_radius(self, prediction: TrackerPredictionState) -> float:
+        """Convert uncertainty and target size into candidate spacing."""
+        target_extent = max(prediction.target_size)
+        radius = target_extent * prediction.uncertainty * self.config.uncertainty_radius_scale
+        return max(1.0, radius)
+
+    def _candidate_confidence(self, prediction: TrackerPredictionState) -> float:
+        """Lower candidate confidence as prediction uncertainty grows."""
+        confidence = prediction.last_score / (1.0 + max(0.0, prediction.uncertainty))
+        return max(self.config.min_candidate_confidence, min(1.0, confidence))
+
+    def _candidate_reason(self, mode: TrackerMode, offset: Point) -> str:
+        """Explain why this candidate was generated."""
+        if offset == (0.0, 0.0):
+            return f"{mode.value.lower()} kalman center"
+        return f"{mode.value.lower()} kalman uncertainty offset"
 
     def _covariances(self, metadata: Mapping[str, Any]) -> Dict[str, Covariance2x2]:
         """Read per-dimension covariance from prediction metadata."""

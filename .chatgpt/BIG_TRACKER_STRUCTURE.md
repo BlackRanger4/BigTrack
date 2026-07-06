@@ -194,9 +194,11 @@ Do not put matcher internals into prediction state. Do not put motion prediction
 
 The predictor reads `BigTrackState` and creates search candidates. It does not crop images and does not know matcher-specific template/search formulas.
 
+Concrete predictor models live in `BigTracker/predictor_models/` and inherit from `PredictorModel`.
+
 ```text
 Predictor:
-  model: PredictorModel
+  base API
 
   predict(state: BigTrackState, frame: FrameLike) -> TrackerPredictionState
 
@@ -209,13 +211,26 @@ Predictor:
 
 ### PredictorModel
 
+`PredictorModel` is the base class for real predictor models. There is no separate adapter layer. A concrete model should implement the full predictor API directly.
+
 ```text
 PredictorModel:
-  predict_position(...)
-  predict_size(...)
-  predict_uncertainty(...)
-  update_from_accept(...)
-  update_from_reject(...)
+  predict(state, frame) -> TrackerPredictionState
+
+  make_candidates(
+    state,
+    prediction,
+    frame
+  ) -> list[SearchCandidate]
+
+  update_from_accept(
+    state,
+    accepted_pos,
+    accepted_size,
+    score
+  ) -> TrackerPredictionState
+
+  update_from_reject(state) -> TrackerPredictionState
 ```
 
 The model can be:
@@ -224,6 +239,14 @@ The model can be:
 - alpha-beta filter
 - constant velocity model
 - custom learned motion model
+
+Example:
+
+```text
+BigTracker/predictor_models/kalman.py
+  class KalmanPredictorModel(PredictorModel):
+    ...
+```
 
 ### SearchCandidate
 
