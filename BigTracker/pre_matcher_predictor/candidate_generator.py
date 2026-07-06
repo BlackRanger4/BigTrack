@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple
 
-from BigTracker.track_state import Box, CandidateState, TrackerMode
+from BigTracker.common_types import Box
+from BigTracker.track_state import CandidateState, TrackerMode
 
 
 class CandidateGenerator(ABC):
@@ -13,6 +14,9 @@ class CandidateGenerator(ABC):
         predicted_box: Box,
         search_region: Box,
         mode: TrackerMode,
+        prediction_confidence: float,
+        motion_uncertainty: float,
+        size_uncertainty: float,
         expected_scale_range: Tuple[float, float],
         external_detections: Optional[Sequence[Box]] = None,
     ) -> Sequence[CandidateState]:

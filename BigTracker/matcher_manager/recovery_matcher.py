@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Sequence
 
 from BigTracker.matcher_manager.matcher_adapter import MatcherAdapter
-from BigTracker.track_state import CandidateState, Frame, MatchResult
+from BigTracker.common_types import Frame
+from BigTracker.track_state import CandidateState, MatchEvidence
 from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
@@ -15,15 +16,7 @@ class RecoveryMatcher(ABC):
         frame: Frame,
         candidates: Sequence[CandidateState],
         visual_memory: VisualMemory,
-    ) -> Sequence[MatchResult]:
-        ...
-
-    @abstractmethod
-    def verify_identity_first(
-        self,
-        result: MatchResult,
-        visual_memory: VisualMemory,
-    ) -> bool:
+    ) -> Sequence[MatchEvidence]:
         ...
 
     @abstractmethod

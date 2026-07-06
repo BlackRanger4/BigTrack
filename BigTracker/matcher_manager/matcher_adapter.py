@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
-from BigTracker.track_state import Box, CandidateState, Frame, MatchResult, MatcherMode, Template
+from BigTracker.common_types import Box, Frame, Size, Template
+from BigTracker.track_state import CandidateState, MatchEvidence, MatcherMode
 from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
@@ -17,12 +18,22 @@ class MatcherTemplateBundle:
 
 
 @dataclass(frozen=True)
+class CoordinateTransform:
+    crop_region: Box
+    model_input_size: Size
+    padding: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class MatcherSearchInput:
     candidate_id: str
     frame: Frame
     search_region: Box
     predicted_box: Box
     expected_scale_range: Tuple[float, float]
+    model_input: Any
+    coordinate_transform: CoordinateTransform
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -31,7 +42,9 @@ class RawMatcherOutput:
     candidate_id: str
     raw_box: Any
     raw_scores: Mapping[str, float]
-    raw_template_candidate: Optional[Any] = None
+    response_map: Optional[Any] = None
+    second_best_score: Optional[float] = None
+    template_scores: Mapping[str, float] = field(default_factory=dict)
     raw_debug_maps: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -69,7 +82,7 @@ class MatcherAdapter(ABC):
         raw_output: RawMatcherOutput,
         candidate: CandidateState,
         mode: MatcherMode,
-    ) -> MatchResult:
+    ) -> MatchEvidence:
         ...
 
     @abstractmethod

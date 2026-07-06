@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from BigTracker.track_state import Template
+from BigTracker.common_types import Template
 
 
 @dataclass(frozen=True)

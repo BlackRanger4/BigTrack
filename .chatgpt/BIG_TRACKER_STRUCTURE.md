@@ -264,18 +264,21 @@ MatcherMode:
 ### Outputs
 
 ```text
-MatchResult list:
+MatchEvidence list:
   candidate_id
   box
-  match_score
-  identity_score
-  appearance_score
-  localization_score
-  ambiguity_score
-  scale_score
-  occlusion_hint
+  scores:
+    match
+    identity
+    appearance
+    localization
+    ambiguity
+    scale
+    occlusion
+  scale evidence
+  ambiguity evidence
+  occlusion evidence
   search_region_id
-  template_update_candidate
   debug_maps, optional
 ```
 
@@ -305,9 +308,9 @@ MatchResult list:
    ambiguity_score = second_best_score / best_score
    ```
 
-5. Return template update candidates.
+5. Return template-update evidence only.
 
-   The matcher can suggest a crop for template update, but the post-process decides whether to use it.
+   The matcher can expose box, score, response-map, ambiguity, clipping, and visibility evidence. It must not return a ready-to-insert template. The post-process decides whether memory may update, then the template update adapter extracts and builds memory objects from the approved frame region.
 
 ### Matcher Selection
 
@@ -367,7 +370,7 @@ The post-matcher turns visual evidence into tracker decisions.
 ```text
 TrackState
 CandidateState list
-MatchResult list
+MatchEvidence list
 frame index
 ```
 
@@ -513,7 +516,7 @@ and ambiguity_score is low
 and box is not clipped
 and scale jump is plausible
 and target is not occluded:
-  allow template update candidate
+  allow template update from the approved frame region
 ```
 
 ### Update Forbidden
@@ -533,7 +536,7 @@ or object is heavily occluded:
 Do not update immediately from a single frame. Keep the best candidate over a short interval.
 
 ```text
-candidate_pool.add(template_update_candidate)
+candidate_pool.add(approved_frame_region)
 
 every update_interval:
   choose best stable candidate
@@ -709,7 +712,7 @@ Recommended:
 for each frame:
   candidates = pre_matcher.predict(track_state, frame)
 
-  match_results = matcher.run(
+  match_evidence = matcher.run(
     frame=frame,
     candidates=candidates,
     visual_memory=track_state.visual_memory,
@@ -719,18 +722,15 @@ for each frame:
   decision = post_process.decide(
     track_state=track_state,
     candidates=candidates,
-    match_results=match_results
+    match_evidence=match_evidence
   )
 
-  if decision.accept_match:
-    update_kinematic_state(decision.best_box)
-  else:
-    handle_miss_or_occlusion()
+  track_state = state_updater.apply_decision(track_state, decision)
 
-  if decision.allow_template_update:
-    update_visual_memory(decision.template_candidate)
+  if decision.memory_update.action != FREEZE:
+    visual_memory = template_update_policy.apply_approved_update(frame, visual_memory, decision)
 
-  update_mode_and_counters(decision)
+  apply lifecycle transition from decision
 
   return public_output(track_state)
 ```
@@ -754,8 +754,6 @@ BigTracker
     MatchRanker
     StateUpdatePolicy
     TemplateUpdatePolicy
-    ModeTransitionPolicy
-    LostTrackPolicy
   VisualMemory
     IdentityAnchor
     ShortTermTemplate
@@ -835,4 +833,3 @@ candidate pruning
 6. Motion consistency should help ranking, but identity consistency should protect the track.
 7. Recovery should use larger search and stricter identity checks.
 8. Lost is a state, not a crash. The tracker should report it clearly.
-

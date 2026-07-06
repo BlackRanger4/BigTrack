@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
-from BigTracker.track_state import Box, Frame, KinematicState, TrackState
+from BigTracker.common_types import Box, Frame
+from BigTracker.track_state import KinematicState, TrackState
 
 
 class StatePredictor(ABC):

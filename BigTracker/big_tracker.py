@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence
 
-from BigTracker.track_state import Box, Frame, TrackState, TrackingOutput
+from BigTracker.common_types import Box, Frame
+from BigTracker.track_state import TrackState, TrackingOutput
 
 
 class BigTracker(ABC):
@@ -12,7 +13,12 @@ class BigTracker(ABC):
         ...
 
     @abstractmethod
-    def update(self, frame: Frame, frame_index: int) -> TrackingOutput:
+    def update(
+        self,
+        frame: Frame,
+        frame_index: int,
+        external_detections: Optional[Sequence[Box]] = None,
+    ) -> TrackingOutput:
         ...
 
     @abstractmethod

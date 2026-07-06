@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, TYPE_CHECKING, Tuple
+
+from BigTracker.common_types import Box, Point, Size
 
 
-Box = Tuple[float, float, float, float]
-Point = Tuple[float, float]
-Size = Tuple[float, float]
-Frame = Any
-Template = Any
-FeatureMap = Mapping[str, Any]
+if TYPE_CHECKING:
+    from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
 class TrackerMode(str, Enum):
@@ -35,6 +33,25 @@ class OutputStatus(str, Enum):
     LOST = "LOST"
 
 
+class AcceptanceLevel(str, Enum):
+    STRONG = "STRONG"
+    WEAK = "WEAK"
+    REJECTED = "REJECTED"
+
+
+class OutputBoxSource(str, Enum):
+    MATCHED = "MATCHED"
+    PREDICTED = "PREDICTED"
+    LAST_ACCEPTED = "LAST_ACCEPTED"
+    NONE = "NONE"
+
+
+class MemoryUpdateAction(str, Enum):
+    FREEZE = "FREEZE"
+    COLLECT = "COLLECT"
+    APPLY = "APPLY"
+
+
 @dataclass(frozen=True)
 class KinematicState:
     position: Point
@@ -46,15 +63,35 @@ class KinematicState:
 
 
 @dataclass(frozen=True)
-class LastResult:
-    accepted_box: Optional[Box]
-    predicted_box: Optional[Box]
-    matched_box: Optional[Box]
-    match_score: float
-    identity_score: float
-    appearance_score: float
-    localization_score: float
-    ambiguity_score: float
+class MatchScores:
+    match: float
+    identity: float
+    appearance: float
+    localization: float
+    scale: float
+    ambiguity: float
+    occlusion: float
+
+
+@dataclass(frozen=True)
+class AmbiguityEvidence:
+    second_best_score: Optional[float] = None
+    peak_ratio: Optional[float] = None
+    competing_candidates: int = 0
+
+
+@dataclass(frozen=True)
+class ScaleEvidence:
+    estimated_scale: float
+    expected_range: Tuple[float, float]
+    size: Size
+
+
+@dataclass(frozen=True)
+class OcclusionEvidence:
+    visible_ratio: Optional[float] = None
+    clipped_by_frame: bool = False
+    score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -64,37 +101,65 @@ class CandidateState:
     search_region: Box
     prediction_confidence: float
     motion_uncertainty: float
+    size_uncertainty: float
     expected_scale_range: Tuple[float, float]
     priority: float
     reason: str
+    source: str = "prediction"
 
 
 @dataclass(frozen=True)
-class MatchResult:
+class MatchEvidence:
     candidate_id: str
     box: Box
-    match_score: float
-    identity_score: float
-    appearance_score: float
-    localization_score: float
-    ambiguity_score: float
-    scale_score: float
-    occlusion_hint: float
+    scores: MatchScores
     search_region_id: str
-    template_update_candidate: Optional[Template]
+    scale: ScaleEvidence
+    ambiguity: AmbiguityEvidence = field(default_factory=AmbiguityEvidence)
+    occlusion: OcclusionEvidence = field(default_factory=OcclusionEvidence)
     debug_maps: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LastResult:
+    accepted_box: Optional[Box]
+    predicted_box: Optional[Box]
+    matched_box: Optional[Box]
+    scores: Optional[MatchScores]
+    output_status: OutputStatus
+    output_box_source: OutputBoxSource
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class LifecycleTransition:
+    next_mode: TrackerMode
+    status: OutputStatus
+    lost_count: int
+    uncertain_count: int
+    recovery_count: int
+    last_seen_frame: int
+
+
+@dataclass(frozen=True)
+class MemoryUpdatePlan:
+    action: MemoryUpdateAction
+    source_candidate_id: Optional[str] = None
+    reason: str = ""
 
 
 @dataclass(frozen=True)
 class TrackerDecision:
-    accept_match: bool
-    strong_accept: bool
-    allow_template_update: bool
-    mode: TrackerMode
-    status: OutputStatus
-    best_result: Optional[MatchResult]
-    best_box: Optional[Box]
+    acceptance: AcceptanceLevel
+    transition: LifecycleTransition
+    selected_candidate: Optional[CandidateState]
+    selected_match: Optional[MatchEvidence]
+    output_box: Optional[Box]
+    output_box_source: OutputBoxSource
     confidence: float
+    identity_confidence: float
+    memory_update: MemoryUpdatePlan
     reason: str
 
 
@@ -104,6 +169,7 @@ class TrackingOutput:
     box: Optional[Box]
     confidence: float
     identity_score: float
+    box_source: OutputBoxSource
     reason: str
 
 
@@ -117,6 +183,6 @@ class TrackState:
     uncertain_count: int
     recovery_count: int
     kinematic_state: KinematicState
-    visual_memory: Any
+    visual_memory: "VisualMemory"
     last_result: LastResult
     candidate_history: Sequence[CandidateState] = field(default_factory=tuple)

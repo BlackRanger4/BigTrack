@@ -5,7 +5,7 @@ from typing import Sequence
 
 from BigTracker.track_state import (
     CandidateState,
-    MatchResult,
+    MatchEvidence,
     TrackState,
     TrackerDecision,
     TrackingOutput,
@@ -18,7 +18,7 @@ class PostMatcherDecision(ABC):
         self,
         track_state: TrackState,
         candidates: Sequence[CandidateState],
-        match_results: Sequence[MatchResult],
+        match_evidence: Sequence[MatchEvidence],
         frame_index: int,
     ) -> TrackerDecision:
         ...

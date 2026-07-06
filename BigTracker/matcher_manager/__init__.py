@@ -1,5 +1,6 @@
 from BigTracker.matcher_manager.fast_matcher import FastMatcher
 from BigTracker.matcher_manager.matcher_adapter import (
+    CoordinateTransform,
     MatcherAdapter,
     MatcherSearchInput,
     MatcherTemplateBundle,
@@ -11,6 +12,7 @@ from BigTracker.matcher_manager.recovery_matcher import RecoveryMatcher
 
 
 __all__ = [
+    "CoordinateTransform",
     "FastMatcher",
     "MatcherAdapter",
     "MatcherManager",

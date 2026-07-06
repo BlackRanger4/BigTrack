@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Sequence
 
 from BigTracker.matcher_manager.matcher_adapter import MatcherAdapter
-from BigTracker.track_state import CandidateState, Frame, MatchResult, MatcherMode
+from BigTracker.common_types import Frame
+from BigTracker.track_state import CandidateState, MatchEvidence, MatcherMode
 from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
@@ -16,7 +17,7 @@ class MatcherManager(ABC):
         candidates: Sequence[CandidateState],
         visual_memory: VisualMemory,
         mode: MatcherMode,
-    ) -> Sequence[MatchResult]:
+    ) -> Sequence[MatchEvidence]:
         ...
 
     @abstractmethod

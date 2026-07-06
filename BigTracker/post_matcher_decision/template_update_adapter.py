@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Mapping, Optional
 
-from BigTracker.track_state import Frame, MatchResult, Template, TrackerDecision
+from BigTracker.common_types import Frame, Template
+from BigTracker.track_state import TrackerDecision
 from BigTracker.visual_memory.identity_anchor import IdentityAnchor
 from BigTracker.visual_memory.short_term_template import ShortTermTemplate
 from BigTracker.visual_memory.template_bank import TemplateBankEntry
@@ -16,7 +17,6 @@ class TemplateUpdateAdapter(ABC):
     def extract_template_candidate(
         self,
         frame: Frame,
-        result: MatchResult,
         decision: TrackerDecision,
     ) -> Optional[Template]:
         ...
@@ -25,7 +25,7 @@ class TemplateUpdateAdapter(ABC):
     def build_short_term_template(
         self,
         template_candidate: Template,
-        result: MatchResult,
+        decision: TrackerDecision,
         frame_index: int,
     ) -> ShortTermTemplate:
         ...
@@ -34,7 +34,7 @@ class TemplateUpdateAdapter(ABC):
     def build_template_bank_entry(
         self,
         template_candidate: Template,
-        result: MatchResult,
+        decision: TrackerDecision,
         frame_index: int,
     ) -> TemplateBankEntry:
         ...
@@ -44,7 +44,7 @@ class TemplateUpdateAdapter(ABC):
         self,
         identity_anchor: IdentityAnchor,
         template_candidate: Template,
-        result: MatchResult,
+        decision: TrackerDecision,
         frame_index: int,
     ) -> VariationState:
         ...

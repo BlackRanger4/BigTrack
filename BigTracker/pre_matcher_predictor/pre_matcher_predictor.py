@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional, Sequence
 
-from BigTracker.track_state import Box, CandidateState, Frame, MatcherMode, TrackState
+from BigTracker.common_types import Box, Frame
+from BigTracker.track_state import CandidateState, MatcherMode, TrackState
 
 
 class PreMatcherPredictor(ABC):

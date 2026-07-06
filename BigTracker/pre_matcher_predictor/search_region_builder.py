@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Tuple
 
-from BigTracker.track_state import Box, TrackerMode
+from BigTracker.common_types import Box
+from BigTracker.track_state import TrackerMode
 
 
 class SearchRegionBuilder(ABC):

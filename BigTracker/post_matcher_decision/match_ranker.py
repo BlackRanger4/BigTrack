@@ -4,13 +4,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from BigTracker.track_state import CandidateState, MatchResult, TrackState
+from BigTracker.track_state import CandidateState, MatchEvidence, TrackState
 
 
 @dataclass(frozen=True)
 class RankedMatch:
     candidate: CandidateState
-    result: MatchResult
+    evidence: MatchEvidence
     score: float
     reason: str
 
@@ -21,7 +21,7 @@ class MatchRanker(ABC):
         self,
         track_state: TrackState,
         candidates: Sequence[CandidateState],
-        match_results: Sequence[MatchResult],
+        match_evidence: Sequence[MatchEvidence],
     ) -> Sequence[RankedMatch]:
         ...
 
