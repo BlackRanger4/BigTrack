@@ -17,7 +17,12 @@ from BigTracker.types import Box, FrameLike, Point, Size
 
 
 class BigTrack(ABC):
-    """Main tracker orchestrator that owns Predictor, Matcher, and lifecycle decisions."""
+    """Base API for tracker orchestrators.
+
+    A BigTrack implementation owns one Predictor, one Matcher, one internal
+    state, and the policy decisions that connect visual evidence to lifecycle
+    state. Concrete implementations live in BigTracker/big_trackers.
+    """
 
     predictor: Predictor
     matcher: Matcher
@@ -76,6 +81,12 @@ class BigTrack(ABC):
         ...
 
     @abstractmethod
-    def apply_decision(self, state: BigTrackState, decision: BigTrackDecision) -> BigTrackState:
+    def apply_decision(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        decision: BigTrackDecision,
+        frame: FrameLike,
+    ) -> BigTrackState:
         """Apply decision results to prediction state, matcher state, output, and mode."""
         ...

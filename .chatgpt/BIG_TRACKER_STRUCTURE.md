@@ -31,6 +31,7 @@ The matcher may create or update model-specific template objects, but only when 
 
 ```text
 BigTrack
+BaseBigTrack
 Predictor
 PredictorModel
 Matcher
@@ -353,7 +354,20 @@ This is evidence only. It is not an accept/reject decision.
 
 ## BigTrack
 
-`BigTrack` is the orchestrator. It owns the predictor, matcher, internal state, and post-process decision logic.
+`BigTrack` is the abstract orchestrator API. It defines how a tracker initializes, updates, exposes state/output, creates candidates, decides lifecycle, and applies decisions.
+
+Concrete tracker implementations live in `BigTracker/big_trackers/`.
+
+```text
+BigTracker/big_track.py
+  class BigTrack
+    abstract API only
+
+BigTracker/big_trackers/base.py
+  class BaseBigTrack(BigTrack)
+    reusable initialize/update/reset/getter flow
+    does not implement candidate or lifecycle policy
+```
 
 ```text
 BigTrack:
@@ -389,7 +403,16 @@ BigTrack:
     candidates: list[SearchCandidate],
     matches: list[MatchEvidence]
   ) -> BigTrackDecision
+
+  apply_decision(
+    state: BigTrackState,
+    prediction: TrackerPredictionState,
+    decision: BigTrackDecision,
+    frame: FrameLike
+  ) -> BigTrackState
 ```
+
+`make_candidates(...)`, `decide(...)`, and `apply_decision(...)` are the policy hooks. `BaseBigTrack` owns the shared update flow, but these methods stay abstract until a real tracker policy is designed.
 
 ### Initialize Flow
 
@@ -461,7 +484,12 @@ update(frame):
     matches
   )
 
-  state = apply_decision(state, decision)
+  state = apply_decision(
+    state,
+    prediction,
+    decision,
+    frame
+  )
 
   if decision.allow_template_update:
     candidate_template = matcher.extract_template(
