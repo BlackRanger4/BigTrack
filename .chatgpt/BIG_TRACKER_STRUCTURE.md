@@ -337,7 +337,13 @@ BigTrack:
   matcher: Matcher
   state: BigTrackState
 
-  initialize(frame: FrameLike, box) -> BigTrackState
+  initialize(
+    frame: FrameLike,
+    box,
+    target_velocity = None,
+    target_size_velocity = None,
+    initial_confidence = 1.0
+  ) -> BigTrackState
 
   update(frame: FrameLike) -> TrackingOutput
 
@@ -358,14 +364,27 @@ BigTrack:
 ### Initialize Flow
 
 ```text
-initialize(frame, box):
+initialize(
+  frame,
+  box,
+  target_velocity = None,
+  target_size_velocity = None,
+  initial_confidence = 1.0
+):
   target_pos, target_size = box_to_center_size(box)
+
+  if target_velocity is None:
+    target_velocity = (0, 0)
+
+  if target_size_velocity is None:
+    target_size_velocity = (0, 0)
 
   prediction_state = TrackerPredictionState(
     target_pos,
     target_size,
-    velocity = 0,
-    last_score = 1
+    target_velocity,
+    target_size_velocity,
+    last_score = initial_confidence
   )
 
   matcher_state = matcher.initialize_template(
