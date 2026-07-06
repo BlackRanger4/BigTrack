@@ -1,5 +1,6 @@
 from BigTracker.big_track import BigTrack
 from BigTracker.matcher import Matcher, MatcherModel
+from BigTracker.matcher_models import FftMatcherConfig, FftMatcherModel, FftTemplate
 from BigTracker.predictor import Predictor, PredictorModel
 from BigTracker.predictor_models import KalmanPredictorConfig, KalmanPredictorModel
 from BigTracker.state import (
@@ -22,6 +23,9 @@ __all__ = [
     "BigTrackDecision",
     "BigTrackState",
     "Box",
+    "FftMatcherConfig",
+    "FftMatcherModel",
+    "FftTemplate",
     "KalmanPredictorConfig",
     "KalmanPredictorModel",
     "MatchEvidence",

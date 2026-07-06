@@ -15,7 +15,6 @@ Predictor
   owns motion prediction
   reads tracker state
   predicts where the target center and size should be
-  creates search candidates
 
 Matcher
   owns model-specific template extraction
@@ -269,8 +268,6 @@ The matcher owns visual model behavior. It receives frame, templates, and predic
 
 ```text
 Matcher:
-  model: MatcherModel
-
   initialize_template(
     frame: FrameLike,
     target_pos,
@@ -299,18 +296,25 @@ Matcher:
 
 ### MatcherModel
 
+`MatcherModel` is the base class for real matcher models. There is no separate adapter layer. A concrete model should implement the matcher API directly.
+
 ```text
 MatcherModel:
-  build_template_crop(...)
-  build_search_crop(...)
-  encode_template(...)
-  run_match(...)
-  decode_box(...)
-  score_identity(...)
-  score_ambiguity(...)
+  initialize_template(...)
+  extract_template(...)
+  update_templates(...)
+  match(...)
 ```
 
 This is where MixFormer, OSTrack, Siamese trackers, or any other visual tracker plugs in.
+
+Example:
+
+```text
+BigTracker/matcher_models/fft.py
+  class FftMatcherModel(MatcherModel):
+    ...
+```
 
 ### TemplateCandidate
 
