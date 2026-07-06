@@ -24,10 +24,10 @@ from tests.fulltest.runner import FullTestRunner, RunnerConfig  # noqa: E402
 # -----------------------------------------------------------------------------
 
 # Choose "video" for mp4/mkv/avi files, or "folder" for sorted image folders.
-INPUT_KIND = "folder"
+INPUT_KIND = "video"
 
 # Put your video file path or image folder path here.
-INPUT_PATH = r"CHANGE_ME"
+INPUT_PATH = r"ignores\girl_dance.mp4"
 
 # Used only when INPUT_KIND == "folder"; timestamps become frame_idx / FOLDER_FPS.
 FOLDER_FPS = 30.0
@@ -92,11 +92,16 @@ POLICY_KIND = "simple"
 
 RUNNER_CONFIG = RunnerConfig(
     window_name="BigTracker fulltest",
+    # The frame is always rendered to this size, so the OpenCV window stays fixed.
+    window_width=1280,
+    window_height=720,
     start_paused=True,
     continuous=False,
     frame_delay_ms=1,
     print_every_n_frames=1,
     draw_tracker_box=True,
+    # Draw timing, playback state, and key controls directly on the window.
+    draw_key_help=True,
     max_timing_samples=300,
 )
 
