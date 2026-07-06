@@ -1,28 +1,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Sequence
 
-from BigTracker.state import BigTrackState, SearchCandidate, TrackerPredictionState
+from BigTracker.state import BigTrackState, TrackerPredictionState
 from BigTracker.types import FrameLike, Point, Size
 
 
 class Predictor(ABC):
-    """Base API for anything that predicts motion and creates search candidates."""
+    """Base API for anything that predicts and updates motion state."""
 
     @abstractmethod
     def predict(self, state: BigTrackState, frame: FrameLike) -> TrackerPredictionState:
         """Predict target center, target size, velocity, score, and uncertainty."""
-        ...
-
-    @abstractmethod
-    def make_candidates(
-        self,
-        state: BigTrackState,
-        prediction: TrackerPredictionState,
-        frame: FrameLike,
-    ) -> Sequence[SearchCandidate]:
-        """Create candidate search centers for Matcher to evaluate."""
         ...
 
     @abstractmethod

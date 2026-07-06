@@ -192,7 +192,7 @@ Do not put matcher internals into prediction state. Do not put motion prediction
 
 ## Predictor
 
-The predictor reads `BigTrackState` and creates search candidates. It does not crop images and does not know matcher-specific template/search formulas.
+The predictor reads `BigTrackState` and predicts motion state. It does not create search candidates, crop images, or know matcher-specific template/search formulas.
 
 Concrete predictor models live in `BigTracker/predictor_models/` and inherit from `PredictorModel`.
 
@@ -202,26 +202,23 @@ Predictor:
 
   predict(state: BigTrackState, frame: FrameLike) -> TrackerPredictionState
 
-  make_candidates(
-    state: BigTrackState,
-    prediction: TrackerPredictionState,
-    frame: FrameLike
-  ) -> list[SearchCandidate]
+  update_from_accept(
+    state,
+    accepted_pos,
+    accepted_size,
+    score
+  ) -> TrackerPredictionState
+
+  update_from_reject(state) -> TrackerPredictionState
 ```
 
 ### PredictorModel
 
-`PredictorModel` is the base class for real predictor models. There is no separate adapter layer. A concrete model should implement the full predictor API directly.
+`PredictorModel` is the base class for real predictor models. There is no separate adapter layer. A concrete model should implement the predictor API directly.
 
 ```text
 PredictorModel:
   predict(state, frame) -> TrackerPredictionState
-
-  make_candidates(
-    state,
-    prediction,
-    frame
-  ) -> list[SearchCandidate]
 
   update_from_accept(
     state,
@@ -250,7 +247,7 @@ BigTracker/predictor_models/kalman.py
 
 ### SearchCandidate
 
-The candidate should describe where the matcher should search, but not how large the final matcher crop must be.
+`BigTrack` creates search candidates from prediction state and tracker mode. The candidate should describe where the matcher should search, but not how large the final matcher crop must be.
 
 ```text
 SearchCandidate:
@@ -370,6 +367,12 @@ BigTrack:
 
   update(frame: FrameLike) -> TrackingOutput
 
+  make_candidates(
+    state: BigTrackState,
+    prediction: TrackerPredictionState,
+    frame: FrameLike
+  ) -> list[SearchCandidate]
+
   reset() -> None
 
   get_state() -> BigTrackState
@@ -430,7 +433,7 @@ initialize(
 update(frame):
   prediction = predictor.predict(state, frame)
 
-  candidates = predictor.make_candidates(
+  candidates = make_candidates(
     state,
     prediction,
     frame
@@ -517,7 +520,7 @@ Do not put these rules into `Matcher`.
 ## Ownership Rules
 
 1. `Predictor` owns motion prediction.
-2. `Predictor` creates `SearchCandidate`.
+2. `BigTrack` creates `SearchCandidate` from prediction state and tracker mode.
 3. `Matcher` owns template extraction and visual matching.
 4. `Matcher` chooses its own template/search crop formulas.
 5. `Matcher` returns `MatchEvidence`, not lifecycle decisions.

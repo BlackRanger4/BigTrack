@@ -40,6 +40,16 @@ class BigTrack(ABC):
         ...
 
     @abstractmethod
+    def make_candidates(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        frame: FrameLike,
+    ) -> Sequence[SearchCandidate]:
+        """Create search candidates from prediction and current tracker mode."""
+        ...
+
+    @abstractmethod
     def reset(self) -> None:
         """Clear internal state and latest output."""
         ...
