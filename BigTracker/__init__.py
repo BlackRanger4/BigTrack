@@ -1,6 +1,14 @@
 from BigTracker.big_track import BigTrack
 from BigTracker.matcher import Matcher, MatcherModel
-from BigTracker.predictor import Predictor, PredictorModel
+from BigTracker.predictor import (
+    DefaultPredictor,
+    ModelPredictorAdapter,
+    Predictor,
+    PredictorCandidateConfig,
+    PredictorModel,
+    PredictorModelAdapter,
+)
+from BigTracker.predictor_models import KalmanPredictorConfig, KalmanPredictorModel
 from BigTracker.state import (
     BigTrackCounters,
     BigTrackDecision,
@@ -21,16 +29,22 @@ __all__ = [
     "BigTrackDecision",
     "BigTrackState",
     "Box",
+    "DefaultPredictor",
+    "KalmanPredictorConfig",
+    "KalmanPredictorModel",
     "MatchEvidence",
     "Matcher",
     "MatcherModel",
     "MatcherState",
     "FrameLike",
     "ImageLike",
+    "ModelPredictorAdapter",
     "OutputStatus",
     "Point",
     "Predictor",
+    "PredictorCandidateConfig",
     "PredictorModel",
+    "PredictorModelAdapter",
     "SearchCandidate",
     "Size",
     "TemplateCandidate",
