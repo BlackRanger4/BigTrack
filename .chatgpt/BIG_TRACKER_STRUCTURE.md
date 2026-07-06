@@ -367,6 +367,13 @@ BigTracker/big_trackers/base.py
   class BaseBigTrack(BigTrack)
     reusable initialize/update/reset/getter flow
     does not implement candidate or lifecycle policy
+
+BigTracker/big_trackers/simple.py
+  class SimpleBigTrack(BaseBigTrack)
+    one candidate at predicted target position
+    accepts matcher output without score thresholds
+    does not update templates
+    does not handle recovery, lost state, occlusion, or distractors
 ```
 
 ```text
@@ -413,6 +420,8 @@ BigTrack:
 ```
 
 `make_candidates(...)`, `decide(...)`, and `apply_decision(...)` are the policy hooks. `BaseBigTrack` owns the shared update flow, but these methods stay abstract until a real tracker policy is designed.
+
+`SimpleBigTrack` is the first concrete tracker policy. It exists for integration testing and simple demos, not as the final robust policy.
 
 ### Initialize Flow
 
