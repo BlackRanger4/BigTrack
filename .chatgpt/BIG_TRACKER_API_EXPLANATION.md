@@ -130,9 +130,35 @@ It is the public entry point for the pre-matcher stage.
 Exports matcher APIs:
 
 - `FastMatcher`
+- `MatcherAdapter`
+- `MatcherSearchInput`
+- `MatcherTemplateBundle`
 - `MultiTemplateMatcher`
+- `RawMatcherOutput`
 - `RecoveryMatcher`
 - `MatcherManager`
+
+### `BigTracker/matcher_manager/matcher_adapter.py`
+
+Defines the adapter boundary between this tracker and a real visual matcher.
+
+This is the missing integration layer. The tracker owns `Frame`, `CandidateState`, and `VisualMemory`, but a matcher usually wants native inputs such as tensors, image crops, template features, response maps, and model-specific scores. The adapter converts between those worlds.
+
+Data contracts:
+
+- `MatcherTemplateBundle` is the prepared identity template, short-term template, template-bank items, and cached features.
+- `MatcherSearchInput` is the prepared search input for one candidate region.
+- `RawMatcherOutput` is the matcher-native result before it is decoded into tracker evidence.
+
+Adapter methods:
+
+- `prepare_templates(...)` converts `VisualMemory` into matcher-ready template inputs.
+- `prepare_search_input(...)` converts a frame and candidate into matcher-ready search input.
+- `run_native_matcher(...)` calls the real matcher backend.
+- `decode_result(...)` converts raw matcher output into `MatchResult`.
+- `refresh_cache(...)` rebuilds cached matcher features after memory changes.
+
+The matcher stage uses this adapter before and after the real matcher. The post-matcher stage does not call the native matcher; it consumes the decoded `MatchResult`.
 
 ### `BigTracker/matcher_manager/fast_matcher.py`
 
@@ -142,6 +168,7 @@ It is intended for confident normal tracking:
 
 - `match(...)` matches one candidate quickly.
 - `warm_cache(...)` prepares cached template features.
+- `get_adapter()` exposes the adapter used to prepare matcher-native inputs and decode outputs.
 
 It returns `MatchResult`, not lifecycle decisions.
 
@@ -153,6 +180,7 @@ It compares candidates against identity anchor, short-term template, and templat
 
 - `match_many(...)` returns evidence for many candidates.
 - `score_template_agreement(...)` measures agreement between a result and visual memory.
+- `get_adapter()` exposes the adapter used for matcher-native conversion.
 
 This supports scale, pose, lighting, and appearance variation without allowing template drift decisions inside the matcher.
 
@@ -164,6 +192,7 @@ It is intended for occlusion, disappearance, and reappearance:
 
 - `recover(...)` searches recovery candidates.
 - `verify_identity_first(...)` checks whether a result strongly agrees with the identity anchor.
+- `get_adapter()` exposes the adapter used for recovery matcher conversion.
 
 Recovery is stricter because the tracker must avoid similar distractors.
 
@@ -175,6 +204,7 @@ It selects and runs matcher behavior by mode:
 
 - `run(...)` returns a list of `MatchResult` objects.
 - `supports_mode(...)` reports whether a matcher mode is available.
+- `get_adapter(...)` returns the adapter used for the selected matcher mode.
 
 This keeps matcher selection outside the main tracker loop.
 
@@ -187,6 +217,7 @@ Exports post-matcher decision APIs:
 - `MatchRanker`
 - `RankedMatch`
 - `StateUpdatePolicy`
+- `TemplateUpdateAdapter`
 - `TemplateUpdatePolicy`
 - `ModeTransitionPolicy`
 - `LostTrackPolicy`
@@ -218,9 +249,59 @@ Defines template-memory update rules.
 
 - `can_update(...)` decides whether a result is clean enough for memory update.
 - `collect_candidate(...)` extracts the proposed template candidate.
+- `get_adapter()` exposes the adapter that builds memory objects from an approved candidate.
 - `apply_update(...)` returns updated `VisualMemory`.
+- `extract_and_apply_update(...)` combines approved extraction and memory update.
 
 This protects the core rule that templates are not updated during uncertainty, occlusion, recovery, or weak matches.
+
+### `BigTracker/post_matcher_decision/template_update_adapter.py`
+
+Defines the adapter boundary between an approved `MatchResult` and concrete visual-memory objects.
+
+This adapter is separate from `TemplateUpdatePolicy` because policy decides whether an update is allowed, while the adapter knows how to crop, normalize, encode, or package the template for the matcher backend.
+
+Adapter methods:
+
+- `extract_template_candidate(...)` extracts the candidate template from the frame and accepted match.
+- `build_short_term_template(...)` converts that candidate into `ShortTermTemplate`.
+- `build_template_bank_entry(...)` converts that candidate into one `TemplateBankEntry`.
+- `build_variation_state(...)` records how the candidate differs from the identity anchor.
+- `refresh_cached_features(...)` rebuilds matcher cache after memory changes.
+
+The post-matcher stage uses this after a strong accepted decision. It should not update memory directly from raw matcher output without passing through the policy gate.
+
+## Matcher Adapter Flow
+
+The intended matcher flow is:
+
+```text
+CandidateState + VisualMemory
+  -> MatcherAdapter.prepare_templates(...)
+  -> MatcherAdapter.prepare_search_input(...)
+  -> MatcherAdapter.run_native_matcher(...)
+  -> MatcherAdapter.decode_result(...)
+  -> MatchResult
+```
+
+The `MatchResult` then goes to post-matcher ranking and decision. It is evidence, not a final lifecycle decision.
+
+## Template Update Adapter Flow
+
+The intended template update flow is:
+
+```text
+TrackerDecision + MatchResult + Frame
+  -> TemplateUpdatePolicy.can_update(...)
+  -> TemplateUpdateAdapter.extract_template_candidate(...)
+  -> TemplateUpdateAdapter.build_short_term_template(...)
+  -> TemplateUpdateAdapter.build_template_bank_entry(...)
+  -> TemplateUpdateAdapter.build_variation_state(...)
+  -> TemplateUpdateAdapter.refresh_cached_features(...)
+  -> VisualMemory
+```
+
+This keeps matching and learning separated. The matcher can suggest a candidate, but post-matcher policy decides if it is safe to learn from it.
 
 ### `BigTracker/post_matcher_decision/mode_transition_policy.py`
 
