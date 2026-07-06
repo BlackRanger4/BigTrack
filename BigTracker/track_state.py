@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
 
 class TrackerMode(str, Enum):
+    """Internal lifecycle mode for one track."""
+
     INIT = "INIT"
     TRACKING = "TRACKING"
     UNCERTAIN = "UNCERTAIN"
@@ -21,12 +23,16 @@ class TrackerMode(str, Enum):
 
 
 class MatcherMode(str, Enum):
+    """Matcher runtime mode chosen from tracker lifecycle state."""
+
     NORMAL = "normal"
     UNCERTAIN = "uncertain"
     RECOVERY = "recovery"
 
 
 class OutputStatus(str, Enum):
+    """Public status exposed to tracker users."""
+
     ACTIVE = "ACTIVE"
     UNCERTAIN = "UNCERTAIN"
     OCCLUDED = "OCCLUDED"
@@ -34,12 +40,16 @@ class OutputStatus(str, Enum):
 
 
 class AcceptanceLevel(str, Enum):
+    """Post-matcher confidence level for the selected visual evidence."""
+
     STRONG = "STRONG"
     WEAK = "WEAK"
     REJECTED = "REJECTED"
 
 
 class OutputBoxSource(str, Enum):
+    """Describes where the public output box came from."""
+
     MATCHED = "MATCHED"
     PREDICTED = "PREDICTED"
     LAST_ACCEPTED = "LAST_ACCEPTED"
@@ -47,6 +57,8 @@ class OutputBoxSource(str, Enum):
 
 
 class MemoryUpdateAction(str, Enum):
+    """Post-matcher intent for visual-memory updates."""
+
     FREEZE = "FREEZE"
     COLLECT = "COLLECT"
     APPLY = "APPLY"
@@ -54,6 +66,8 @@ class MemoryUpdateAction(str, Enum):
 
 @dataclass(frozen=True)
 class KinematicState:
+    """Motion and size estimate owned by the tracker, not the matcher."""
+
     position: Point
     size: Size
     velocity: Point
@@ -64,6 +78,8 @@ class KinematicState:
 
 @dataclass(frozen=True)
 class MatchScores:
+    """Normalized visual scores returned by a matcher backend."""
+
     match: float
     identity: float
     appearance: float
@@ -75,6 +91,8 @@ class MatchScores:
 
 @dataclass(frozen=True)
 class AmbiguityEvidence:
+    """Evidence that the best match may be confused with another target."""
+
     second_best_score: Optional[float] = None
     peak_ratio: Optional[float] = None
     competing_candidates: int = 0
@@ -82,6 +100,8 @@ class AmbiguityEvidence:
 
 @dataclass(frozen=True)
 class ScaleEvidence:
+    """Scale estimate and expected scale bounds for one match."""
+
     estimated_scale: float
     expected_range: Tuple[float, float]
     size: Size
@@ -89,6 +109,8 @@ class ScaleEvidence:
 
 @dataclass(frozen=True)
 class OcclusionEvidence:
+    """Signals that the object may be clipped, hidden, or only partly visible."""
+
     visible_ratio: Optional[float] = None
     clipped_by_frame: bool = False
     score: float = 0.0
@@ -96,6 +118,8 @@ class OcclusionEvidence:
 
 @dataclass(frozen=True)
 class CandidateState:
+    """One pre-matcher hypothesis describing where and how to search."""
+
     candidate_id: str
     predicted_box: Box
     search_region: Box
@@ -110,6 +134,8 @@ class CandidateState:
 
 @dataclass(frozen=True)
 class MatchEvidence:
+    """Visual evidence returned by the matcher; never a lifecycle decision."""
+
     candidate_id: str
     box: Box
     scores: MatchScores
@@ -123,6 +149,8 @@ class MatchEvidence:
 
 @dataclass(frozen=True)
 class LastResult:
+    """Compact summary of the previous public/internal tracking result."""
+
     accepted_box: Optional[Box]
     predicted_box: Optional[Box]
     matched_box: Optional[Box]
@@ -134,6 +162,8 @@ class LastResult:
 
 @dataclass(frozen=True)
 class LifecycleTransition:
+    """Single source of truth for mode, status, counters, and last-seen frame."""
+
     next_mode: TrackerMode
     status: OutputStatus
     lost_count: int
@@ -144,6 +174,8 @@ class LifecycleTransition:
 
 @dataclass(frozen=True)
 class MemoryUpdatePlan:
+    """Post-matcher plan for whether visual memory stays frozen or changes."""
+
     action: MemoryUpdateAction
     source_candidate_id: Optional[str] = None
     reason: str = ""
@@ -151,6 +183,8 @@ class MemoryUpdatePlan:
 
 @dataclass(frozen=True)
 class TrackerDecision:
+    """Complete post-matcher decision for state, output, and memory update."""
+
     acceptance: AcceptanceLevel
     transition: LifecycleTransition
     selected_candidate: Optional[CandidateState]
@@ -165,6 +199,8 @@ class TrackerDecision:
 
 @dataclass(frozen=True)
 class TrackingOutput:
+    """Public per-frame tracker output."""
+
     status: OutputStatus
     box: Optional[Box]
     confidence: float
@@ -175,6 +211,8 @@ class TrackingOutput:
 
 @dataclass(frozen=True)
 class TrackState:
+    """Internal state for one tracked object."""
+
     track_id: str
     mode: TrackerMode
     age: int

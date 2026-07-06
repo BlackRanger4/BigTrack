@@ -13,12 +13,15 @@ from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
 class TemplateUpdateAdapter(ABC):
+    """Builds concrete memory objects from an approved tracker decision."""
+
     @abstractmethod
     def extract_template_candidate(
         self,
         frame: Frame,
         decision: TrackerDecision,
     ) -> Optional[Template]:
+        """Crop or encode the approved frame region into a template candidate."""
         ...
 
     @abstractmethod
@@ -28,6 +31,7 @@ class TemplateUpdateAdapter(ABC):
         decision: TrackerDecision,
         frame_index: int,
     ) -> ShortTermTemplate:
+        """Build the short-term template object from an approved candidate."""
         ...
 
     @abstractmethod
@@ -37,6 +41,7 @@ class TemplateUpdateAdapter(ABC):
         decision: TrackerDecision,
         frame_index: int,
     ) -> TemplateBankEntry:
+        """Build one template-bank entry from an approved candidate."""
         ...
 
     @abstractmethod
@@ -47,8 +52,10 @@ class TemplateUpdateAdapter(ABC):
         decision: TrackerDecision,
         frame_index: int,
     ) -> VariationState:
+        """Describe how an approved candidate differs from the identity anchor."""
         ...
 
     @abstractmethod
     def refresh_cached_features(self, visual_memory: VisualMemory) -> Mapping[str, Any]:
+        """Recompute matcher caches after visual memory changes."""
         ...

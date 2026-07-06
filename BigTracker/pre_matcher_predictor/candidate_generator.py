@@ -8,6 +8,8 @@ from BigTracker.track_state import CandidateState, TrackerMode
 
 
 class CandidateGenerator(ABC):
+    """Creates one or more matcher candidates from prediction and detections."""
+
     @abstractmethod
     def generate_candidates(
         self,
@@ -20,6 +22,7 @@ class CandidateGenerator(ABC):
         expected_scale_range: Tuple[float, float],
         external_detections: Optional[Sequence[Box]] = None,
     ) -> Sequence[CandidateState]:
+        """Generate normal or uncertain-mode candidates for visual matching."""
         ...
 
     @abstractmethod
@@ -30,4 +33,5 @@ class CandidateGenerator(ABC):
         frame_shape: Tuple[int, int],
         external_detections: Optional[Sequence[Box]] = None,
     ) -> Sequence[CandidateState]:
+        """Generate wider recovery candidates after repeated misses or occlusion."""
         ...

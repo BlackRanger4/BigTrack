@@ -8,6 +8,8 @@ from BigTracker.common_types import Template
 
 @dataclass(frozen=True)
 class IdentityAnchor:
+    """First trusted identity template; template update code must preserve it."""
+
     track_id: str
     template: Template
     created_frame: int

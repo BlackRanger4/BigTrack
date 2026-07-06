@@ -10,6 +10,8 @@ from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
 class MultiTemplateMatcher(ABC):
+    """Matcher path that compares candidates against multiple memory templates."""
+
     @abstractmethod
     def match_many(
         self,
@@ -18,6 +20,7 @@ class MultiTemplateMatcher(ABC):
         visual_memory: VisualMemory,
         mode: MatcherMode,
     ) -> Sequence[MatchEvidence]:
+        """Evaluate many candidates and return one evidence item per match."""
         ...
 
     @abstractmethod
@@ -26,8 +29,10 @@ class MultiTemplateMatcher(ABC):
         evidence: MatchEvidence,
         visual_memory: VisualMemory,
     ) -> float:
+        """Score agreement between evidence and the current visual memory."""
         ...
 
     @abstractmethod
     def get_adapter(self) -> MatcherAdapter:
+        """Return the adapter used by this matcher implementation."""
         ...

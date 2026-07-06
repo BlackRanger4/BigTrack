@@ -13,6 +13,8 @@ from BigTracker.track_state import (
 
 
 class PostMatcherDecision(ABC):
+    """Turns visual evidence into lifecycle, output, and memory-update decisions."""
+
     @abstractmethod
     def decide(
         self,
@@ -21,8 +23,10 @@ class PostMatcherDecision(ABC):
         match_evidence: Sequence[MatchEvidence],
         frame_index: int,
     ) -> TrackerDecision:
+        """Accept, reject, recover, or declare lost from matcher evidence."""
         ...
 
     @abstractmethod
     def build_output(self, track_state: TrackState, decision: TrackerDecision) -> TrackingOutput:
+        """Convert internal state and decision into the public tracker output."""
         ...

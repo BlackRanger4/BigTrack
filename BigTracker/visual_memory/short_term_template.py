@@ -8,6 +8,8 @@ from BigTracker.common_types import Template
 
 @dataclass(frozen=True)
 class ShortTermTemplate:
+    """Current clean appearance template used for short-term adaptation."""
+
     template: Template
     source_frame: int
     quality_score: float

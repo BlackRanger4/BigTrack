@@ -6,6 +6,8 @@ from BigTracker.track_state import TrackState, TrackerDecision
 
 
 class StateUpdatePolicy(ABC):
+    """Applies one post-matcher decision to immutable track state."""
+
     @abstractmethod
     def apply_decision(
         self,
@@ -13,4 +15,5 @@ class StateUpdatePolicy(ABC):
         decision: TrackerDecision,
         frame_index: int,
     ) -> TrackState:
+        """Update kinematics, counters, mode, and last-result from the decision."""
         ...

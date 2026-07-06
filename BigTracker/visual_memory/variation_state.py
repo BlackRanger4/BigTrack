@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class VariationState:
+    """Tracks accepted appearance change relative to the identity anchor."""
+
     anchor_difference: Any
     source_frame: int
     confidence: float

@@ -11,6 +11,8 @@ from BigTracker.visual_memory.variation_state import VariationState
 
 @dataclass(frozen=True)
 class VisualMemory:
+    """All visual identity memory read by matchers and updated only by policy."""
+
     identity_anchor: IdentityAnchor
     short_term_template: Optional[ShortTermTemplate]
     template_bank: TemplateBank
@@ -25,6 +27,7 @@ class VisualMemory:
         variation_state: Optional[VariationState] = None,
         cached_features: Optional[Mapping[str, Any]] = None,
     ) -> "VisualMemory":
+        """Return updated memory while preserving the immutable identity anchor."""
         return VisualMemory(
             identity_anchor=self.identity_anchor,
             short_term_template=(

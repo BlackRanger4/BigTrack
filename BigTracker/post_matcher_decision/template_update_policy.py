@@ -9,16 +9,20 @@ from BigTracker.visual_memory.visual_memory import VisualMemory
 
 
 class TemplateUpdatePolicy(ABC):
+    """Owns the safety gate for all visual-memory updates."""
+
     @abstractmethod
     def can_update(
         self,
         track_state: TrackState,
         decision: TrackerDecision,
     ) -> bool:
+        """Return whether the approved decision is safe for memory learning."""
         ...
 
     @abstractmethod
     def get_adapter(self) -> TemplateUpdateAdapter:
+        """Return the adapter that extracts and builds backend memory objects."""
         ...
 
     @abstractmethod
@@ -29,4 +33,5 @@ class TemplateUpdatePolicy(ABC):
         decision: TrackerDecision,
         frame_index: int,
     ) -> VisualMemory:
+        """Extract and apply a memory update after policy approval."""
         ...

@@ -8,6 +8,8 @@ from BigTracker.track_state import CandidateState, MatcherMode, TrackState
 
 
 class PreMatcherPredictor(ABC):
+    """Facade for prediction, search-region building, and candidate generation."""
+
     @abstractmethod
     def predict(
         self,
@@ -16,8 +18,10 @@ class PreMatcherPredictor(ABC):
         frame_index: int,
         external_detections: Optional[Sequence[Box]] = None,
     ) -> Sequence[CandidateState]:
+        """Prepare all candidates that the matcher should evaluate for this frame."""
         ...
 
     @abstractmethod
     def choose_matcher_mode(self, track_state: TrackState) -> MatcherMode:
+        """Map tracker lifecycle mode to the matcher runtime mode."""
         ...
