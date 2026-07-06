@@ -1,835 +1,500 @@
 # Big Tracker Structure
 
-This document describes the full tracker around the visual matcher.
+This document defines the intended object-tracker architecture.
 
-The matcher is only one part of the system. It should decide whether an image region matches the target appearance. The bigger tracker should own prediction, state management, template update policy, recovery, and lost-track decisions.
-
-High-level separation:
+The design should stay simple:
 
 ```text
-Pre-matcher:
-  predict where the target may be
-  predict expected size and uncertainty
-  create candidate search regions
+BigTrack
+  owns one Predictor
+  owns one Matcher
+  owns one BigTrackState
+  decides lifecycle, output status, and when templates may update
 
-Matcher:
-  visually compare target memory against candidate regions
-  return boxes, scores, identity evidence, and update candidates
+Predictor
+  owns motion prediction
+  reads tracker state
+  predicts where the target center and size should be
+  creates search candidates
 
-Post-process:
-  decide whether to accept, reject, hold, recover, update templates, update states, or declare lost
+Matcher
+  owns model-specific template extraction
+  owns model-specific search crop rules
+  owns visual matching
+  returns visual evidence
+```
+
+The matcher may create or update model-specific template objects, but only when `BigTrack` asks it to. The matcher must not decide track lifecycle, lost state, recovery success, or whether learning is safe.
+
+---
+
+## Core Classes
+
+```text
+BigTrack
+Predictor
+PredictorModel
+Matcher
+MatcherModel
+BigTrackState
+TrackerPredictionState
+MatcherState
+TrackingOutput
+FrameLike
+```
+
+Keep these as the main architecture. Avoid many small policy classes until the core tracker works.
+
+---
+
+## Frame Protocol
+
+The frame object is not owned by the tracker. The tracker only needs a protocol describing the required fields.
+
+```text
+FrameLike:
+  image
+    np.ndarray or tensor
+    shape can be HxWxC or HxW
+
+  idx
+    integer frame index
+
+  timestamp
+    capture time or stream timestamp
+```
+
+Do not force every project to use the same frame class. Accept any object that exposes these fields, or define an adapter if needed.
+
+---
+
+## Tracker Prediction State
+
+This is the motion-side state. It should stay independent from matcher templates.
+
+```text
+TrackerPredictionState:
+  target_pos
+    center point: cx, cy
+
+  target_size
+    width, height
+
+  target_velocity
+    vx, vy
+
+  target_size_velocity
+    vw, vh
+
+  last_score
+    last accepted tracker confidence
+
+  uncertainty
+    scalar or structured uncertainty used by Predictor
+```
+
+This state is enough for a Kalman filter, alpha-beta filter, constant-velocity model, or simple custom predictor.
+
+---
+
+## Matcher State
+
+This is the visual-side state. It belongs to the matcher domain.
+
+```text
+MatcherState:
+  init_template
+    first trusted identity template
+    never overwritten
+
+  best_templates
+    bounded queue of approved clean templates
+    max size is configurable
+
+  adaptive_template
+    current online template
+    updated only when BigTrack approves
+
+  cached_features
+    optional model-specific cache
+```
+
+The matcher defines what a template is. For MixFormer, OSTrack, Siamese trackers, or a classical matcher, the internal template object may be different.
+
+The important rule:
+
+```text
+Matcher can build template objects.
+BigTrack decides when template building/updating is allowed.
 ```
 
 ---
 
-## Main Goal
+## Output Data
 
-The tracker should keep the correct object identity when:
-
-- the object becomes bigger or smaller,
-- the object moves fast,
-- the object is partly or fully occluded,
-- the object disappears and appears again,
-- there are similar distractors,
-- several predicted states or candidate boxes exist.
-
-The tracker should not blindly trust either motion prediction or visual matching. It should fuse them through explicit confidence and state rules.
-
----
-
-## Full Pipeline
+This is what client code receives. It should not expose internal tracker state.
 
 ```text
-Frame t
-  |
-  v
-1. Pre-matcher prediction
-  - predict target position, size, velocity, uncertainty
-  - create candidate states and search regions
-  - choose matcher mode: normal / uncertain / recovery
-  |
-  v
-2. Visual matcher
-  - match identity anchor, online templates, and state memories
-  - predict box, scale, and confidence for each candidate region
-  - return visual evidence, not final lifecycle decision
-  |
-  v
-3. Post-matcher decision
-  - accept or reject match
-  - update physical state or hold previous state
-  - update template memory or freeze it
-  - switch mode if confidence changes
-  - declare occluded, lost, or recovered
-  |
-  v
-Track state for frame t
+TrackingOutput:
+  box
+    optional x, y, width, height
+
+  frame_idx
+    source frame index
+
+  timestamp
+    source frame timestamp
+
+  status
+    ACTIVE / UNCERTAIN / OCCLUDED / LOST
+
+  confidence
+    public confidence score
 ```
 
+`get_output()` should return this object or the latest one.
+
+`get_state()` should return internal state for debugging, checkpointing, or advanced users.
+
 ---
 
-## Track State
+## Big Track State
 
-Each tracked object should have one main state object.
+This is the full internal state for one object track.
 
 ```text
-TrackState:
-  id
+BigTrackState:
+  prediction
+    TrackerPredictionState
+
+  matcher
+    MatcherState
+
+  output
+    last TrackingOutput
+
   mode
-  age
+    INIT / TRACKING / UNCERTAIN / OCCLUDED / RECOVERY / LOST
+
+  counters
+    age
+    lost_count
+    uncertain_count
+    recovery_count
+
   last_seen_frame
-  lost_count
-  uncertain_count
-  recovery_count
-
-  kinematic_state:
-    position: cx, cy
-    size: w, h
-    velocity: vx, vy
-    size_velocity: vw, vh
-    uncertainty_position
-    uncertainty_size
-
-  visual_memory:
-    identity_anchor
-    short_term_template
-    template_bank
-    variation_state
-    cached_features
-
-  last_result:
-    accepted_box
-    predicted_box
-    matched_box
-    match_score
-    identity_score
-    appearance_score
-    localization_score
-    ambiguity_score
+    last frame index with accepted visual evidence
 ```
 
-The exact predictor can be a Kalman filter, another estimator, or a custom model. The important design rule is that this predictor lives outside the matcher.
+Do not put matcher internals into prediction state. Do not put motion prediction internals into matcher state.
 
 ---
 
-## Tracker Modes
+## Predictor
 
-The tracker should use modes instead of one flat tracking loop.
-
-| Mode | Meaning | Matcher Behavior | Post-process Behavior |
-|---|---|---|---|
-| `INIT` | First frame or new track | Create identity anchor | Initialize state and memory |
-| `TRACKING` | Confident normal tracking | Compact search, normal matcher | Accept good matches, allow safe template update |
-| `UNCERTAIN` | Match quality dropped | Wider search or multiple candidates | Freeze templates, require stronger identity evidence |
-| `OCCLUDED` | Target likely hidden | Recovery matcher, identity-first | Hold or predict state, do not update template |
-| `RECOVERY` | Search for target after miss | Expanded search, compare candidates | Accept only high identity and low ambiguity |
-| `LOST` | Track cannot be trusted | Optional global re-detection | Stop reporting active target or mark inactive |
-
-Mode transitions should be driven by scores and counters, not a single bad frame.
-
----
-
-## Pre-Matcher Stage
-
-The pre-matcher prepares hypotheses before any visual model runs.
-
-### Inputs
+The predictor reads `BigTrackState` and creates search candidates. It does not crop images and does not know matcher-specific template/search formulas.
 
 ```text
-frame
-previous TrackState
-external detections, optional
-scene constraints, optional
+Predictor:
+  model: PredictorModel
+
+  predict(state: BigTrackState, frame: FrameLike) -> TrackerPredictionState
+
+  make_candidates(
+    state: BigTrackState,
+    prediction: TrackerPredictionState,
+    frame: FrameLike
+  ) -> list[SearchCandidate]
 ```
 
-### Outputs
+### PredictorModel
 
 ```text
-CandidateState list:
-  predicted_box
-  search_region
+PredictorModel:
+  predict_position(...)
+  predict_size(...)
+  predict_uncertainty(...)
+  update_from_accept(...)
+  update_from_reject(...)
+```
+
+The model can be:
+
+- Kalman filter
+- alpha-beta filter
+- constant velocity model
+- custom learned motion model
+
+### SearchCandidate
+
+The candidate should describe where the matcher should search, but not how large the final matcher crop must be.
+
+```text
+SearchCandidate:
+  candidate_id
+  search_center
+  predicted_target_size
   prediction_confidence
   motion_uncertainty
-  expected_scale_range
-  priority
   reason
 ```
 
-### Responsibilities
-
-1. Predict target position.
-
-   Estimate where the target center should be in the new frame.
-
-   ```text
-   previous position + velocity -> predicted position
-   ```
-
-2. Predict target size.
-
-   Estimate expected width and height. This matters because the matcher search crop depends on target scale.
-
-   ```text
-   previous size + size_velocity -> predicted size
-   ```
-
-3. Estimate uncertainty.
-
-   If motion is stable, uncertainty is small. If the target is occluded, moving fast, or recently mismatched, uncertainty grows.
-
-4. Build candidate states.
-
-   Do not send only one region when uncertainty is high. Create several candidate search areas.
-
-   Examples:
-
-   ```text
-   normal:
-     one compact search region around predicted box
-
-   uncertain:
-     predicted region
-     previous accepted region
-     slightly larger search region
-
-   recovery:
-     large region around predicted position
-     region around last seen position
-     detector proposals, if available
-     global or tiled search, if needed
-   ```
-
-5. Choose matcher mode.
-
-   The pre-matcher tells the matcher how hard the situation is.
-
-   ```text
-   TRACKING -> compact, fast matcher
-   UNCERTAIN -> wider, stricter matcher
-   RECOVERY -> identity-first matcher
-   ```
-
-### Search Region Policy
-
-```text
-base_search_factor:
-  used when tracking is confident
-
-uncertain_search_factor:
-  used after low score or high uncertainty
-
-recovery_search_factor:
-  used after repeated misses or occlusion
-```
-
-Search factor should grow with uncertainty, not with raw speed alone.
-
-Recommended behavior:
-
-```text
-if mode == TRACKING:
-  search_factor = base
-
-if mode == UNCERTAIN:
-  search_factor = base + uncertainty_scale
-
-if mode == RECOVERY:
-  search_factor = large
-  generate multiple regions if needed
-```
+The matcher decides the actual search crop because each matcher has its own formula. For example, one matcher may use `2 * sqrt(w * h)` for template size and `2.5x` for search size.
 
 ---
 
-## Matcher Stage
+## Matcher
 
-The matcher is a pluggable visual verification module.
-
-It should not decide track lifecycle by itself. It should return evidence.
-
-### Inputs
+The matcher owns visual model behavior. It receives frame, templates, and predicted search information. It internally crops, normalizes, runs the model, and decodes boxes.
 
 ```text
-frame
-CandidateState list
-VisualMemory:
-  identity_anchor
-  short_term_template
-  template_bank
-  variation_state
-  cached_features
-MatcherMode:
-  normal / uncertain / recovery
+Matcher:
+  model: MatcherModel
+
+  initialize_template(
+    frame: FrameLike,
+    target_pos,
+    target_size
+  ) -> MatcherState
+
+  extract_template(
+    frame: FrameLike,
+    target_pos,
+    target_size,
+    previous_state: MatcherState
+  ) -> TemplateCandidate
+
+  update_templates(
+    state: MatcherState,
+    template: TemplateCandidate
+  ) -> MatcherState
+
+  match(
+    frame: FrameLike,
+    matcher_state: MatcherState,
+    candidate: SearchCandidate,
+    mode: TrackerMode
+  ) -> MatchEvidence
 ```
 
-### Outputs
+### MatcherModel
 
 ```text
-MatchEvidence list:
+MatcherModel:
+  build_template_crop(...)
+  build_search_crop(...)
+  encode_template(...)
+  run_match(...)
+  decode_box(...)
+  score_identity(...)
+  score_ambiguity(...)
+```
+
+This is where MixFormer, OSTrack, Siamese trackers, or any other visual tracker plugs in.
+
+### TemplateCandidate
+
+```text
+TemplateCandidate:
+  template
+  source_frame_idx
+  source_box
+  quality_score
+  identity_score
+  metadata
+```
+
+`TemplateCandidate` is not automatically inserted into `MatcherState`. `BigTrack` must approve the update first.
+
+### MatchEvidence
+
+```text
+MatchEvidence:
   candidate_id
   box
-  scores:
-    match
-    identity
-    appearance
-    localization
-    ambiguity
-    scale
-    occlusion
-  scale evidence
-  ambiguity evidence
-  occlusion evidence
-  search_region_id
-  debug_maps, optional
-```
-
-### Matcher Responsibilities
-
-1. Compare against identity anchor.
-
-   The identity anchor is the first clean template and must never be overwritten. It is the main protection against drift.
-
-2. Compare against online appearance memory.
-
-   The short-term template and template bank help when the object changes scale, pose, illumination, or viewpoint.
-
-3. Decode location and scale.
-
-   The default decoder should be center-based:
-
-   ```text
-   score_map + size_map + offset_map -> box
-   ```
-
-4. Score ambiguity.
-
-   A high best score is not enough. The matcher should know whether the second-best object is close.
-
-   ```text
-   ambiguity_score = second_best_score / best_score
-   ```
-
-5. Return template-update evidence only.
-
-   The matcher can expose box, score, response-map, ambiguity, clipping, and visibility evidence. It must not return a ready-to-insert template. The post-process decides whether memory may update, then the template update adapter extracts and builds memory objects from the approved frame region.
-
-### Matcher Selection
-
-The big tracker can choose different matcher behavior by mode.
-
-| Situation | Matcher Behavior |
-|---|---|
-| Normal tracking | Fast cached matcher, compact search |
-| Scale change | Center head with strong size regression, online template evidence |
-| Low confidence | Identity anchor gets higher weight |
-| Occlusion | No template update, recovery evidence only |
-| Reappearance | Expanded search, identity-first selection |
-| Similar distractor | Require identity and appearance agreement |
-| Many candidates | Use cached template features and rank candidates |
-
-### Matcher Score Formula
-
-A practical final match score can combine several signals:
-
-```text
-match_score =
-  w_identity     * identity_score +
-  w_appearance   * appearance_score +
-  w_localization * localization_score +
-  w_scale        * scale_score -
-  w_ambiguity    * ambiguity_score
-```
-
-Weights should change by mode.
-
-Normal mode:
-
-```text
-identity: medium
-appearance: high
-localization: high
-ambiguity penalty: medium
-```
-
-Recovery mode:
-
-```text
-identity: very high
-appearance: medium
-localization: medium
-ambiguity penalty: high
-```
-
----
-
-## Post-Matcher Stage
-
-The post-matcher turns visual evidence into tracker decisions.
-
-### Inputs
-
-```text
-TrackState
-CandidateState list
-MatchEvidence list
-frame index
-```
-
-### Outputs
-
-```text
-Updated TrackState
-public tracking output:
-  active / uncertain / occluded / lost
-  target_box, optional
-  confidence
-  reason
-```
-
-### Main Decisions
-
-1. Accept match.
-
-   Use when match is visually strong and consistent with predicted state.
-
-2. Reject match but keep track alive.
-
-   Use when match is weak but the track was recently confident.
-
-3. Hold or predict state.
-
-   Use during short occlusion. The tracker may output no box, last box, or predicted box depending on application needs.
-
-4. Enter recovery.
-
-   Use after repeated weak matches or suspected object disappearance.
-
-5. Declare lost.
-
-   Use after recovery fails for too long or ambiguity stays high.
-
-6. Update visual memory.
-
-   Only after strong, stable, identity-consistent matches.
-
-7. Update kinematic state.
-
-   Use accepted boxes. Do not update position and velocity from rejected matches.
-
----
-
-## Acceptance Policy
-
-The post-process should not use only one threshold.
-
-### Strong Accept
-
-```text
-if match_score >= high_threshold
-and identity_score >= identity_threshold
-and localization_score >= localization_threshold
-and ambiguity_score <= ambiguity_threshold:
-  accept match
-  update kinematic state
-  maybe update template memory
-  mode = TRACKING
-```
-
-### Weak Accept
-
-Use when visual score is okay but not perfect.
-
-```text
-if match_score >= medium_threshold
-and identity_score >= identity_threshold
-and prediction_consistency is good:
-  accept match
-  update kinematic state carefully
-  do not update template
-  mode = UNCERTAIN or TRACKING depending on counters
-```
-
-### Reject but Keep Alive
-
-```text
-if match_score < medium_threshold
-and lost_count < max_short_miss:
-  reject visual box
-  keep predicted state
-  freeze template
-  mode = UNCERTAIN or OCCLUDED
-```
-
-### Enter Recovery
-
-```text
-if repeated low score
-or object likely outside search region
-or occlusion_hint is high:
-  mode = RECOVERY
-  expand search next frame
-  freeze template memory
-```
-
-### Declare Lost
-
-```text
-if recovery_count > max_recovery_frames
-or identity_score stays low
-or ambiguity stays high:
-  mode = LOST
-  stop normal updates
-```
-
----
-
-## Template Update Policy
-
-Template update must happen after post-process approval, not directly inside the matcher.
-
-### Memory Types
-
-```text
-identity_anchor:
-  created at INIT
-  never updated
-
-short_term_template:
-  current clean appearance
-  updated only after strong accept
-
-template_bank:
-  small memory of diverse confident appearances
-  fixed-size, ranked or circular
-
-variation_state:
-  difference between identity anchor and accepted current appearance
-  updated only when template update is approved
-```
-
-### Update Allowed
-
-```text
-if mode == TRACKING
-and strong_accept
-and identity_score is high
-and ambiguity_score is low
-and box is not clipped
-and scale jump is plausible
-and target is not occluded:
-  allow template update from the approved frame region
-```
-
-### Update Forbidden
-
-```text
-if mode in [UNCERTAIN, OCCLUDED, RECOVERY, LOST]
-or match was weak
-or identity and appearance disagree
-or multiple candidates have similar score
-or box is clipped by image border
-or object is heavily occluded:
-  freeze template memory
-```
-
-### Best Practice
-
-Do not update immediately from a single frame. Keep the best candidate over a short interval.
-
-```text
-candidate_pool.add(approved_frame_region)
-
-every update_interval:
-  choose best stable candidate
-  verify identity anchor agreement
-  insert into short_term_template or template_bank
-```
-
----
-
-## Kinematic State Update
-
-The kinematic state is updated only from accepted visual evidence.
-
-### Strong Match
-
-```text
-position <- matched_box center
-size <- matched_box size
-velocity <- estimate from previous accepted state and current accepted state
-size_velocity <- estimate from size change
-uncertainty <- decrease
-```
-
-### Weak Match
-
-```text
-position <- blend(predicted position, matched position)
-size <- blend(predicted size, matched size)
-velocity <- update cautiously
-uncertainty <- keep or slightly increase
-```
-
-### Rejected Match
-
-```text
-position <- predicted position
-size <- predicted size
-velocity <- keep or damp
-uncertainty <- increase
-```
-
-### Lost Track
-
-```text
-do not update from matcher
-increase uncertainty or stop active prediction
-wait for re-detection if the application supports it
-```
-
----
-
-## Multi-Candidate Decision
-
-When several candidate states exist, the tracker should rank them using both motion and visual evidence.
-
-```text
-candidate_score =
-  a * match_score +
-  b * identity_score +
-  c * motion_consistency +
-  d * scale_consistency -
-  e * ambiguity_score
-```
-
-Motion consistency should not override identity. If a nearby object has good motion but poor identity, it should not win.
-
-Recommended priority:
-
-```text
-1. identity consistency
-2. low ambiguity
-3. localization quality
-4. motion consistency
-5. appearance memory consistency
-6. scale consistency
-```
-
----
-
-## Occlusion Handling
-
-Occlusion is not the same as lost identity.
-
-### Suspect Occlusion When
-
-```text
-match_score drops
-identity_score is still partly present
-box becomes unstable or partially visible
-scale estimate becomes unreliable
-score map is weak or spread out
-```
-
-### During Occlusion
-
-```text
-freeze template updates
-increase search uncertainty
-keep identity anchor active
-do not learn from occluded crop
-hold or predict state
-```
-
-### After Reappearance
-
-```text
-require high identity score
-require low ambiguity
-accept only stable box
-wait before template update
-switch from RECOVERY to TRACKING after confirmation
-```
-
----
-
-## Scale Handling
-
-Scale should be handled in both pre-matcher and matcher.
-
-Pre-matcher:
-
-```text
-predict expected size
-predict size uncertainty
-set search crop based on expected size and uncertainty
-generate alternate scale candidates if needed
-```
-
-Matcher:
-
-```text
-regress width and height through size map
-return scale_score and scale_change
-compare scale against expected range
-```
-
-Post-process:
-
-```text
-accept plausible scale changes
-reject or mark uncertain for extreme one-frame scale jumps
-update size velocity only after accepted matches
-freeze template if scale is unstable
-```
-
----
-
-## Public Output Policy
-
-Different applications want different behavior when confidence is low. The tracker should expose status, not only a box.
-
-```text
-Output:
-  status: ACTIVE / UNCERTAIN / OCCLUDED / LOST
-  box: optional
-  confidence
+  match_score
   identity_score
+  appearance_score
+  localization_score
+  ambiguity_score
+  scale_score
+  occlusion_score
+  is_clipped
+  metadata
+```
+
+This is evidence only. It is not an accept/reject decision.
+
+---
+
+## BigTrack
+
+`BigTrack` is the orchestrator. It owns the predictor, matcher, internal state, and post-process decision logic.
+
+```text
+BigTrack:
+  predictor: Predictor
+  matcher: Matcher
+  state: BigTrackState
+
+  initialize(frame: FrameLike, box) -> BigTrackState
+
+  update(frame: FrameLike) -> TrackingOutput
+
+  reset() -> None
+
+  get_state() -> BigTrackState
+
+  get_output() -> TrackingOutput
+
+  decide(
+    state: BigTrackState,
+    prediction: TrackerPredictionState,
+    candidates: list[SearchCandidate],
+    matches: list[MatchEvidence]
+  ) -> BigTrackDecision
+```
+
+### Initialize Flow
+
+```text
+initialize(frame, box):
+  target_pos, target_size = box_to_center_size(box)
+
+  prediction_state = TrackerPredictionState(
+    target_pos,
+    target_size,
+    velocity = 0,
+    last_score = 1
+  )
+
+  matcher_state = matcher.initialize_template(
+    frame,
+    target_pos,
+    target_size
+  )
+
+  state = BigTrackState(
+    prediction = prediction_state,
+    matcher = matcher_state,
+    mode = TRACKING,
+    output = active output
+  )
+```
+
+### Update Flow
+
+```text
+update(frame):
+  prediction = predictor.predict(state, frame)
+
+  candidates = predictor.make_candidates(
+    state,
+    prediction,
+    frame
+  )
+
+  matches = []
+  for candidate in candidates:
+    matches.append(
+      matcher.match(
+        frame,
+        state.matcher,
+        candidate,
+        state.mode
+      )
+    )
+
+  decision = decide(
+    state,
+    prediction,
+    candidates,
+    matches
+  )
+
+  state = apply_decision(state, decision)
+
+  if decision.allow_template_update:
+    candidate_template = matcher.extract_template(
+      frame,
+      decision.accepted_target_pos,
+      decision.accepted_target_size,
+      state.matcher
+    )
+
+    state.matcher = matcher.update_templates(
+      state.matcher,
+      candidate_template
+    )
+
+  return state.output
+```
+
+---
+
+## BigTrack Decision
+
+The decision object is internal. It is created by `BigTrack.decide(...)`.
+
+```text
+BigTrackDecision:
+  accepted
+    bool
+
+  accepted_box
+    optional box
+
+  accepted_target_pos
+    optional center point
+
+  accepted_target_size
+    optional size
+
+  output_status
+    ACTIVE / UNCERTAIN / OCCLUDED / LOST
+
+  next_mode
+    next TrackerMode
+
+  confidence
+    output confidence
+
+  allow_template_update
+    bool
+
   reason
+    short debug string
 ```
 
-Recommended:
+`BigTrack.decide(...)` is where thresholds, counters, recovery rules, lost rules, and template-freeze rules live.
 
-- `ACTIVE`: output accepted visual box.
-- `UNCERTAIN`: output accepted weak box or predicted box with low confidence.
-- `OCCLUDED`: optionally output predicted box, but mark it as not visually confirmed.
-- `LOST`: output no active target box.
+Do not put these rules into `Matcher`.
 
 ---
 
-## Pseudocode
+## Ownership Rules
 
-```text
-for each frame:
-  candidates = pre_matcher.predict(track_state, frame)
-
-  match_evidence = matcher.run(
-    frame=frame,
-    candidates=candidates,
-    visual_memory=track_state.visual_memory,
-    mode=track_state.mode
-  )
-
-  decision = post_process.decide(
-    track_state=track_state,
-    candidates=candidates,
-    match_evidence=match_evidence
-  )
-
-  track_state = state_updater.apply_decision(track_state, decision)
-
-  if decision.memory_update.action != FREEZE:
-    visual_memory = template_update_policy.apply_approved_update(frame, visual_memory, decision)
-
-  apply lifecycle transition from decision
-
-  return public_output(track_state)
-```
+1. `Predictor` owns motion prediction.
+2. `Predictor` creates `SearchCandidate`.
+3. `Matcher` owns template extraction and visual matching.
+4. `Matcher` chooses its own template/search crop formulas.
+5. `Matcher` returns `MatchEvidence`, not lifecycle decisions.
+6. `BigTrack` owns accept/reject/lost/recovery decisions.
+7. `BigTrack` decides when template update is allowed.
+8. `MatcherState.init_template` is never overwritten.
+9. `TrackingOutput` is small and client-facing.
+10. `BigTrackState` is internal and may contain debugging/state details.
 
 ---
 
-## Suggested Module Layout
+## What Should Not Be Split Yet
 
-```text
-BigTracker
-  TrackState
-  PreMatcherPredictor
-    StatePredictor
-    SearchRegionBuilder
-    CandidateGenerator
-  MatcherManager
-    FastMatcher
-    MultiTemplateMatcher
-    RecoveryMatcher
-  PostMatcherDecision
-    MatchRanker
-    StateUpdatePolicy
-    TemplateUpdatePolicy
-  VisualMemory
-    IdentityAnchor
-    ShortTermTemplate
-    TemplateBank
-    VariationState
-```
+Do not create separate tiny classes for:
 
----
+- mode transition policy,
+- lost policy,
+- output policy,
+- state update policy,
+- template update policy.
 
-## Implementation Order
-
-### Version 1
-
-Build the lifecycle first.
-
-```text
-single predicted state
-single matcher call
-accept/reject thresholds
-TRACKING / UNCERTAIN / LOST modes
-no template update
-```
-
-### Version 2
-
-Add robust memory.
-
-```text
-identity anchor
-short-term template
-template update gate
-template freeze on uncertainty
-```
-
-### Version 3
-
-Add recovery.
-
-```text
-expanded search
-multiple candidate regions
-RECOVERY mode
-identity-first reacceptance
-```
-
-### Version 4
-
-Add multi-state matching.
-
-```text
-multiple visual states
-template bank
-variation state
-candidate ranking by identity + motion + scale
-```
-
-### Version 5
-
-Optimize.
-
-```text
-cached template features
-fast matcher in normal mode
-expensive matcher only in recovery
-candidate pruning
-```
-
----
-
-## Core Rules
-
-1. The matcher returns evidence; post-process makes decisions.
-2. Never update the identity anchor.
-3. Never update templates during uncertainty, occlusion, or recovery.
-4. Do not update velocity from rejected visual matches.
-5. A high visual score is not enough if ambiguity is high.
-6. Motion consistency should help ranking, but identity consistency should protect the track.
-7. Recovery should use larger search and stricter identity checks.
-8. Lost is a state, not a crash. The tracker should report it clearly.
+Keep those decisions inside `BigTrack.decide(...)` and `apply_decision(...)` until the core tracker is working. Split later only if the code becomes large for a real reason.
