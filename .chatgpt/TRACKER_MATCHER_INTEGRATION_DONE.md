@@ -1,6 +1,6 @@
-# Tracker Matcher Integration TODO
+# Tracker Matcher Integration Done
 
-This TODO maps the four external trackers in `ignores/Trackers` into the current `BigTracker` architecture from `BIG_TRACKER_STRUCTURE.md`.
+This completed roadmap maps the four external trackers in `ignores/Trackers` into the current `BigTracker` architecture from `BIG_TRACKER_STRUCTURE.md`.
 
 The target shape is:
 
