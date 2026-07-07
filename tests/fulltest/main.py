@@ -115,7 +115,7 @@ NANOTRACK_CONFIG = NanoTrackMatcherConfig(
 
 # OSTrack source lives under ignores\Trackers. Model config/checkpoint assets
 # live under ignores\Models.
-OSTRACK_VARIANT = "vitb_384_mae_ce_32x4_ep300"
+OSTRACK_VARIANT = "vitb_256_mae_32x4_ep300"
 OSTRACK_VARIANTS = {
     "vitb_256_mae_32x4_ep300": {
         "config_path": r"ignores\Models\Ostrack\config\vitb_256_mae_32x4_ep300.yaml",
@@ -147,7 +147,7 @@ OSTRACK_CONFIG = OSTrackMatcherConfig(
 
 # LiteTrack source lives under ignores\Trackers. Model config/checkpoint assets
 # live under ignores\Models.
-LITETRACK_VARIANT = "B8_cae_center_all_ep300"
+LITETRACK_VARIANT = "B6_cae_center_got10k_ep100"
 LITETRACK_VARIANTS = {
     "B6_cae_center_got10k_ep100": {
         "config_path": r"ignores\Models\litetrack\config\B6_cae_center_got10k_ep100.yaml",
