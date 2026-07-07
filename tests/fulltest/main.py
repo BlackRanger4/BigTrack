@@ -61,7 +61,7 @@ KALMAN_CONFIG = KalmanPredictorConfig(
 # -----------------------------------------------------------------------------
 
 # Current supported values: "fft", "nanotrack".
-MATCHER_KIND = "fft"
+MATCHER_KIND = "nanotrack"
 
 # template_area_factor controls template crop size around the initialized target.
 # search_area_factor controls search crop size around the predicted target center.
@@ -77,13 +77,12 @@ FFT_CONFIG = FftMatcherConfig(
     peak_exclusion_radius=8,
 )
 
-# NanoTrack requires real config/checkpoint files. The ignored source checkout
-# does not currently include the default files, so update these paths before
-# setting MATCHER_KIND = "nanotrack".
+# NanoTrack source lives under ignores\Trackers, while model assets live under
+# ignores\Models.
 NANOTRACK_CONFIG = NanoTrackMatcherConfig(
     source_root=r"ignores\Trackers\NanoTrack",
-    config_path=r"ignores\Trackers\NanoTrack\models\config\configv3.yaml",
-    checkpoint_path=r"ignores\Trackers\NanoTrack\models\pretrained\nanotrackv3.pth",
+    config_path=r"ignores\Models\nanotrack\config\configv3.yaml",
+    checkpoint_path=r"ignores\Models\nanotrack\pretrained\nanotrackv3.pth",
     device=None,
     max_best_templates=5,
 )

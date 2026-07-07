@@ -82,7 +82,12 @@ class NanoTrackMatcherModel(MatcherModel):
 
         self.config = config or NanoTrackMatcherConfig()
         self.device = resolve_device(self.config.device) if backend is None else None
-        self.backend = backend if backend is not None else self._build_backend(backend_factory)
+        if backend is not None:
+            self.backend = backend
+        elif backend_factory is not None:
+            self.backend = backend_factory(self.config)
+        else:
+            self.backend, self.config = _load_real_nanotrack_backend(self.config, self.device)
         self.backend.eval()
         self.points = self._generate_points(self.config.point_stride, self.config.output_size)
         self.window = self._generate_window(self.config.output_size)
@@ -198,13 +203,6 @@ class NanoTrackMatcherModel(MatcherModel):
                 "template_source_frame_idx": template.source_frame_idx,
             },
         )
-
-    def _build_backend(self, backend_factory: Optional[BackendFactory]) -> NanoTrackBackend:
-        """Create a real NanoTrack backend or delegate to an injected factory."""
-
-        if backend_factory is not None:
-            return backend_factory(self.config)
-        return _load_real_nanotrack_backend(self.config, self.device)
 
     def _build_template(
         self,
@@ -346,6 +344,7 @@ class NanoTrackMatcherModel(MatcherModel):
             if delta.shape[0] != 4:
                 delta = delta.reshape(4, -1)
 
+        points = self._points_for_prediction_count(delta.shape[1])
         converted = np.empty_like(delta, dtype="float64")
         converted[0, :] = points[:, 0] - delta[0, :]
         converted[1, :] = points[:, 1] - delta[1, :]
@@ -371,6 +370,7 @@ class NanoTrackMatcherModel(MatcherModel):
         target_height = max(float(predicted_target_size[1]), 1.0)
         score = np.asarray(score, dtype="float64").reshape(-1)
         pred_bbox = np.asarray(pred_bbox, dtype="float64")
+        window = self._window_for_prediction_count(score.shape[0])
 
         s_c = _change(
             _sz(pred_bbox[2, :], pred_bbox[3, :])
@@ -379,7 +379,7 @@ class NanoTrackMatcherModel(MatcherModel):
         r_c = _change((target_width / target_height) / (pred_bbox[2, :] / pred_bbox[3, :]))
         penalty = np.exp(-(r_c * s_c - 1.0) * self.config.penalty_k)
         pscore = penalty * score
-        pscore = pscore * (1.0 - self.config.window_influence) + self.window * self.config.window_influence
+        pscore = pscore * (1.0 - self.config.window_influence) + window * self.config.window_influence
         best_idx = int(np.argmax(pscore))
 
         bbox = pred_bbox[:, best_idx] / scale_z
@@ -465,8 +465,27 @@ class NanoTrackMatcherModel(MatcherModel):
         hanning = np.hanning(int(size))
         return np.outer(hanning, hanning).flatten()
 
+    def _points_for_prediction_count(self, count: int) -> Any:
+        """Return a point grid compatible with a flattened model output."""
 
-def _load_real_nanotrack_backend(config: NanoTrackMatcherConfig, device: Any) -> NanoTrackBackend:
+        if len(self.points) == int(count):
+            return self.points
+        size = _square_size_from_count(count, "NanoTrack location output")
+        return self._generate_points(self.config.point_stride, size)
+
+    def _window_for_prediction_count(self, count: int) -> Any:
+        """Return a Hann window compatible with a flattened score output."""
+
+        if len(self.window) == int(count):
+            return self.window
+        size = _square_size_from_count(count, "NanoTrack score output")
+        return self._generate_window(size)
+
+
+def _load_real_nanotrack_backend(
+    config: NanoTrackMatcherConfig,
+    device: Any,
+) -> tuple[NanoTrackBackend, NanoTrackMatcherConfig]:
     """Load NanoTrack source modules, config, model, and checkpoint."""
 
     source_root = Path(config.source_root)
@@ -489,14 +508,14 @@ def _load_real_nanotrack_backend(config: NanoTrackMatcherConfig, device: Any) ->
     try:
         from nanotrack.core.config import cfg
         from nanotrack.models.model_builder import ModelBuilder
-        from nanotrack.utils.model_load import load_pretrain
 
         cfg.merge_from_file(str(config_path))
+        effective_config = _config_from_loaded_nanotrack_cfg(config, cfg)
         model = ModelBuilder()
-        model = load_pretrain(model, str(checkpoint_path))
+        _load_nanotrack_checkpoint(model, str(checkpoint_path))
         model = model.to(device)
         model.eval()
-        return model
+        return model, effective_config
     finally:
         if inserted:
             try:
@@ -517,6 +536,54 @@ def _snapshot_feature_state(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _snapshot_feature_state(item) for key, item in value.items()}
     return value
+
+
+def _load_nanotrack_checkpoint(model: Any, checkpoint_path: str) -> None:
+    """Load NanoTrack weights with PyTorch 2.6-compatible checkpoint handling."""
+
+    torch = _require_torch()
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+    state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    if not isinstance(state_dict, dict):
+        raise ValueError(f"NanoTrack checkpoint does not contain a state dict: {checkpoint_path}")
+
+    state_dict = {
+        key.split("module.", 1)[-1] if key.startswith("module.") else key: value
+        for key, value in state_dict.items()
+    }
+    model.load_state_dict(state_dict, strict=False)
+
+
+def _config_from_loaded_nanotrack_cfg(
+    config: NanoTrackMatcherConfig,
+    cfg: Any,
+) -> NanoTrackMatcherConfig:
+    """Return matcher config synchronized with the loaded NanoTrack YAML."""
+
+    return replace(
+        config,
+        context_amount=float(cfg.TRACK.CONTEXT_AMOUNT),
+        exemplar_size=int(cfg.TRACK.EXEMPLAR_SIZE),
+        instance_size=int(cfg.TRACK.INSTANCE_SIZE),
+        output_size=int(cfg.TRACK.OUTPUT_SIZE),
+        point_stride=int(cfg.POINT.STRIDE),
+        penalty_k=float(cfg.TRACK.PENALTY_K),
+        window_influence=float(cfg.TRACK.WINDOW_INFLUENCE),
+        lr=float(cfg.TRACK.LR),
+    )
+
+
+def _square_size_from_count(count: int, label: str) -> int:
+    """Infer square output size from a flattened prediction count."""
+
+    size = int(round(math.sqrt(float(count))))
+    if size * size != int(count):
+        raise ValueError(f"{label} has non-square prediction count: {count}")
+    return size
 
 
 def _change(value: Any) -> Any:
@@ -560,4 +627,3 @@ def _require_torch() -> Any:
     except ImportError as error:
         raise RuntimeError("NanoTrackMatcherModel requires torch") from error
     return torch
-
