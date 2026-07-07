@@ -341,10 +341,10 @@ Implementation risk:
 
 ### Phase 1: Matcher Infrastructure
 
-- [ ] Create `_boxes.py`, `_crop.py`, and `_torch.py`.
-- [ ] Add unit tests for crop and map-back math.
-- [ ] Add a tiny fake tensor network test harness so matcher APIs can be tested without real checkpoints.
-- [ ] Decide package isolation strategy before importing any external repo code.
+- [x] ✅ Create `_boxes.py`, `_crop.py`, and `_torch.py`.
+- [x] ✅ Add unit tests for crop and map-back math.
+- [x] ✅ Add a tiny fake tensor network test harness so matcher APIs can be tested without real checkpoints.
+- [x] ✅ Decide package isolation strategy before importing any external repo code.
 
 Acceptance:
 
@@ -353,15 +353,15 @@ Acceptance:
 
 ### Phase 2: NanoTrack Matcher
 
-- [ ] Create `BigTracker/matcher_models/nanotrack.py`.
-- [ ] Add `NanoTrackMatcherConfig`.
-- [ ] Load NanoTrack model and checkpoint once in `NanoTrackMatcherModel.__init__`.
-- [ ] Convert `initialize_template()` from `NanoTracker.init(...)`.
-- [ ] Convert `match()` from `NanoTracker.track(...)`, driven by `SearchCandidate`.
-- [ ] Implement `extract_template()` and `update_templates()` for `init_template`, latest-good bank, and `adaptive_template`.
-- [ ] Return full `MatchEvidence` with `best_score`, penalty/window metadata, and clipping metadata.
-- [ ] Add fake-model tests.
-- [ ] Add optional real checkpoint smoke test behind an environment flag.
+- [x] ✅ Create `BigTracker/matcher_models/nanotrack.py`.
+- [x] ✅ Add `NanoTrackMatcherConfig`.
+- [x] ✅ Load NanoTrack model and checkpoint once in `NanoTrackMatcherModel.__init__`.
+- [x] ✅ Convert `initialize_template()` from `NanoTracker.init(...)`.
+- [x] ✅ Convert `match()` from `NanoTracker.track(...)`, driven by `SearchCandidate`.
+- [x] ✅ Implement `extract_template()` and `update_templates()` for `init_template`, latest-good bank, and `adaptive_template`.
+- [x] ✅ Return full `MatchEvidence` with `best_score`, penalty/window metadata, and clipping metadata.
+- [x] ✅ Add fake-model tests.
+- [x] ✅ Add optional real checkpoint smoke test behind an environment flag.
 
 Why first:
 

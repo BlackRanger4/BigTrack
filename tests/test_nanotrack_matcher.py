@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 import unittest
 
 from BigTracker.big_trackers.simple import SimpleBigTrack
@@ -265,6 +267,54 @@ class NanoTrackMatcherTest(unittest.TestCase):
         self.assertIs(head_session.calls[0]["input2"], search_output)
         self.assertIs(outputs["cls"], cls_output)
         self.assertIs(outputs["loc"], loc_output)
+
+    def test_real_checkpoint_smoke_when_enabled(self) -> None:
+        if os.environ.get("BIGTRACK_RUN_NANOTRACK_REAL_SMOKE") != "1":
+            raise unittest.SkipTest(
+                "set BIGTRACK_RUN_NANOTRACK_REAL_SMOKE=1 to run NanoTrack real checkpoint smoke"
+            )
+
+        np = _require_numpy()
+        config_path = Path(r"ignores\Models\nanotrack\config\configv3.yaml")
+        checkpoint_path = Path(r"ignores\Models\nanotrack\pretrained\nanotrackv3.pth")
+        if not config_path.exists() or not checkpoint_path.exists():
+            raise unittest.SkipTest("NanoTrack config/checkpoint assets are not present")
+
+        image = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame = _Frame(image=image, idx=0, timestamp=0.0)
+        matcher = NanoTrackMatcherModel(
+            NanoTrackMatcherConfig(
+                backend="torch",
+                source_root=r"ignores\Trackers\NanoTrack",
+                config_path=str(config_path),
+                checkpoint_path=str(checkpoint_path),
+                device="cpu",
+            )
+        )
+        state = matcher.initialize_template(
+            frame,
+            target_pos=(160.0, 120.0),
+            target_size=(40.0, 40.0),
+        )
+        evidence = matcher.match(
+            frame,
+            state,
+            SearchCandidate(
+                candidate_id="real-smoke",
+                search_center=(160.0, 120.0),
+                predicted_target_size=(40.0, 40.0),
+                prediction_confidence=1.0,
+                motion_uncertainty=0.0,
+                reason="real checkpoint smoke",
+            ),
+            TrackerMode.TRACKING,
+        )
+
+        self.assertEqual(matcher.config.output_size, 15)
+        self.assertEqual(matcher.config.point_stride, 16)
+        self.assertGreaterEqual(evidence.match_score, 0.0)
+        self.assertLessEqual(evidence.match_score, 1.0)
+        self.assertIsNot(matcher.backend.template_model, matcher.backend.search_model)
 
 
 class _FakeTensor:
