@@ -4,6 +4,11 @@ from BigTracker.matcher_models.litetrack import (
     LiteTrackMatcherModel,
     LiteTrackTemplate,
 )
+from BigTracker.matcher_models.mixformerv2 import (
+    MixFormerV2MatcherConfig,
+    MixFormerV2MatcherModel,
+    MixFormerV2Template,
+)
 from BigTracker.matcher_models.nanotrack import (
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
@@ -23,6 +28,9 @@ __all__ = [
     "LiteTrackMatcherConfig",
     "LiteTrackMatcherModel",
     "LiteTrackTemplate",
+    "MixFormerV2MatcherConfig",
+    "MixFormerV2MatcherModel",
+    "MixFormerV2Template",
     "NanoTrackMatcherConfig",
     "NanoTrackMatcherModel",
     "NanoTrackTemplate",

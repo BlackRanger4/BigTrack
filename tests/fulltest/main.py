@@ -15,6 +15,8 @@ from BigTracker import (  # noqa: E402
     KalmanPredictorModel,
     LiteTrackMatcherConfig,
     LiteTrackMatcherModel,
+    MixFormerV2MatcherConfig,
+    MixFormerV2MatcherModel,
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
     OSTrackMatcherConfig,
@@ -64,8 +66,8 @@ KALMAN_CONFIG = KalmanPredictorConfig(
 # Matcher config
 # -----------------------------------------------------------------------------
 
-# Current supported values: "fft", "nanotrack", "ostrack", "litetrack".
-MATCHER_KIND = "litetrack"
+# Current supported values: "fft", "nanotrack", "ostrack", "litetrack", "mixformerv2".
+MATCHER_KIND = "mixformerv2"
 
 # template_area_factor controls template crop size around the initialized target.
 # search_area_factor controls search crop size around the predicted target center.
@@ -177,6 +179,27 @@ LITETRACK_CONFIG = LiteTrackMatcherConfig(
     max_best_templates=5,
 )
 
+# MixFormerV2 source lives under ignores\Trackers. Model config/checkpoint assets
+# live under ignores\Models.
+MIXFORMERV2_VARIANT = "base"
+MIXFORMERV2_VARIANTS = {
+    "base": {
+        "config_path": r"ignores\Models\mixformerv2\config\288_depth8_score.yaml",
+        "checkpoint_path": r"ignores\Models\mixformerv2\models\mixformerv2_base.pth.tar",
+    },
+    "small": {
+        "config_path": r"ignores\Models\mixformerv2\config\224_depth4_mlp1_score.yaml",
+        "checkpoint_path": r"ignores\Models\mixformerv2\models\mixformerv2_small.pth.tar",
+    },
+}
+MIXFORMERV2_CONFIG = MixFormerV2MatcherConfig(
+    source_root=r"ignores\Trackers\MixFormerV2",
+    **MIXFORMERV2_VARIANTS[MIXFORMERV2_VARIANT],
+    device=None,
+    variant="online",
+    max_best_templates=5,
+)
+
 
 # -----------------------------------------------------------------------------
 # BigTrack policy config
@@ -246,6 +269,8 @@ def _build_matcher():
         return OSTrackMatcherModel(OSTRACK_CONFIG)
     if MATCHER_KIND == "litetrack":
         return LiteTrackMatcherModel(LITETRACK_CONFIG)
+    if MATCHER_KIND == "mixformerv2":
+        return MixFormerV2MatcherModel(MIXFORMERV2_CONFIG)
     raise ValueError(f"Unknown MATCHER_KIND: {MATCHER_KIND!r}")
 
 

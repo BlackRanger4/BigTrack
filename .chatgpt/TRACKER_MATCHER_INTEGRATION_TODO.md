@@ -57,7 +57,7 @@ BigTracker/matcher_models/
   nanotrack.py
   ostrack.py
   litetrack.py
-  mixformer_v2.py
+  mixformerv2.py
 ```
 
 Shared utilities should be small and matcher-facing only:
@@ -408,15 +408,15 @@ Why third:
 
 ### Phase 5: MixFormerV2 Matcher
 
-- [ ] Create `BigTracker/matcher_models/mixformer_v2.py`.
-- [ ] Add `MixFormerV2MatcherConfig` with `variant`.
-- [ ] Load yaml config and checkpoint once in `MixFormerV2MatcherModel.__init__`.
-- [ ] Implement offline variant first.
-- [ ] Implement online variant second, with all template queue updates moved to `update_templates()`.
-- [ ] Use `conf_score` as `match_score` for online mode.
-- [ ] Define offline score derivation if no score head is available.
-- [ ] Add tests proving `match()` never mutates template queues.
-- [ ] Add tests proving `update_templates()` changes `adaptive_template` only after an approved `TemplateCandidate`.
+- [x] âœ… Create `BigTracker/matcher_models/mixformerv2.py`.
+- [x] âœ… Add `MixFormerV2MatcherConfig` with `variant`.
+- [x] âœ… Load yaml config and checkpoint once in `MixFormerV2MatcherModel.__init__`.
+- [x] âœ… Implement offline variant first.
+- [x] âœ… Implement online variant second, with all template queue updates moved to `update_templates()`.
+- [x] âœ… Use `conf_score`/`pred_scores` as `match_score` for online mode.
+- [x] âœ… Define offline score derivation if no score head is available.
+- [x] âœ… Add tests proving `match()` never mutates template queues.
+- [x] âœ… Add tests proving `update_templates()` changes `adaptive_template` only after an approved `TemplateCandidate`.
 
 Why last:
 
