@@ -408,15 +408,15 @@ Why third:
 
 ### Phase 5: MixFormerV2 Matcher
 
-- [x] âœ… Create `BigTracker/matcher_models/mixformerv2.py`.
-- [x] âœ… Add `MixFormerV2MatcherConfig` with `variant`.
-- [x] âœ… Load yaml config and checkpoint once in `MixFormerV2MatcherModel.__init__`.
-- [x] âœ… Implement offline variant first.
-- [x] âœ… Implement online variant second, with all template queue updates moved to `update_templates()`.
-- [x] âœ… Use `conf_score`/`pred_scores` as `match_score` for online mode.
-- [x] âœ… Define offline score derivation if no score head is available.
-- [x] âœ… Add tests proving `match()` never mutates template queues.
-- [x] âœ… Add tests proving `update_templates()` changes `adaptive_template` only after an approved `TemplateCandidate`.
+- [x] ✅ Create `BigTracker/matcher_models/mixformerv2.py`.
+- [x] ✅ Add `MixFormerV2MatcherConfig` with `variant`.
+- [x] ✅ Load yaml config and checkpoint once in `MixFormerV2MatcherModel.__init__`.
+- [x] ✅ Implement offline variant first.
+- [x] ✅ Implement online variant second, with all template queue updates moved to `update_templates()`.
+- [x] ✅ Use `conf_score`/`pred_scores` as `match_score` for online mode.
+- [x] ✅ Define offline score derivation if no score head is available.
+- [x] ✅ Add tests proving `match()` never mutates template queues.
+- [x] ✅ Add tests proving `update_templates()` changes `adaptive_template` only after an approved `TemplateCandidate`.
 
 Why last:
 
