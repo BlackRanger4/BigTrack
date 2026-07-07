@@ -1,7 +1,14 @@
 from BigTracker.big_track import BigTrack
 from BigTracker.big_trackers import BaseBigTrack, SimpleBigTrack
 from BigTracker.matcher import Matcher, MatcherModel
-from BigTracker.matcher_models import FftMatcherConfig, FftMatcherModel, FftTemplate
+from BigTracker.matcher_models import (
+    FftMatcherConfig,
+    FftMatcherModel,
+    FftTemplate,
+    NanoTrackMatcherConfig,
+    NanoTrackMatcherModel,
+    NanoTrackTemplate,
+)
 from BigTracker.predictor import Predictor, PredictorModel
 from BigTracker.predictor_models import KalmanPredictorConfig, KalmanPredictorModel
 from BigTracker.state import (
@@ -34,6 +41,9 @@ __all__ = [
     "Matcher",
     "MatcherModel",
     "MatcherState",
+    "NanoTrackMatcherConfig",
+    "NanoTrackMatcherModel",
+    "NanoTrackTemplate",
     "FrameLike",
     "ImageLike",
     "OutputStatus",
