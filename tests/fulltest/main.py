@@ -15,6 +15,8 @@ from BigTracker import (  # noqa: E402
     KalmanPredictorModel,
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
+    OSTrackMatcherConfig,
+    OSTrackMatcherModel,
     SimpleBigTrack,
 )
 from tests.fulltest.frame_source import build_frame_source  # noqa: E402
@@ -60,8 +62,8 @@ KALMAN_CONFIG = KalmanPredictorConfig(
 # Matcher config
 # -----------------------------------------------------------------------------
 
-# Current supported values: "fft", "nanotrack".
-MATCHER_KIND = "nanotrack"
+# Current supported values: "fft", "nanotrack", "ostrack".
+MATCHER_KIND = "ostrack"
 
 # template_area_factor controls template crop size around the initialized target.
 # search_area_factor controls search crop size around the predicted target center.
@@ -88,6 +90,16 @@ NANOTRACK_CONFIG = NanoTrackMatcherConfig(
     head_path=r"ignores\Models\nanotrack\nanotrackv3\nanotrack_head.onnx",
     onnx_provider="cpu",  # Use "cuda" only with onnxruntime-gpu installed.
     device=None,
+    max_best_templates=5,
+)
+
+# OSTrack source lives under ignores\Trackers, while model assets live under
+# ignores\Models.
+OSTRACK_CONFIG = OSTrackMatcherConfig(
+    source_root=r"ignores\Trackers\OSTrack",
+    config_path=r"ignores\Trackers\OSTrack\experiments\ostrack\vitb_384_mae_ce_32x4_ep300.yaml",
+    checkpoint_path=r"ignores\Models\Ostrack\models\vitb_384_mae_ce_32x4_ep300\OSTrack_ep0300.pth.tar",
+    device="cuda",
     max_best_templates=5,
 )
 
@@ -156,6 +168,8 @@ def _build_matcher():
         return FftMatcherModel(FFT_CONFIG)
     if MATCHER_KIND == "nanotrack":
         return NanoTrackMatcherModel(NANOTRACK_CONFIG)
+    if MATCHER_KIND == "ostrack":
+        return OSTrackMatcherModel(OSTRACK_CONFIG)
     raise ValueError(f"Unknown MATCHER_KIND: {MATCHER_KIND!r}")
 
 
