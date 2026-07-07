@@ -8,6 +8,9 @@ from BigTracker.matcher_models import (
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
     NanoTrackTemplate,
+    OSTrackMatcherConfig,
+    OSTrackMatcherModel,
+    OSTrackTemplate,
 )
 from BigTracker.predictor import Predictor, PredictorModel
 from BigTracker.predictor_models import KalmanPredictorConfig, KalmanPredictorModel
@@ -44,6 +47,9 @@ __all__ = [
     "NanoTrackMatcherConfig",
     "NanoTrackMatcherModel",
     "NanoTrackTemplate",
+    "OSTrackMatcherConfig",
+    "OSTrackMatcherModel",
+    "OSTrackTemplate",
     "FrameLike",
     "ImageLike",
     "OutputStatus",

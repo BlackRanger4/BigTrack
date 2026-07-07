@@ -371,15 +371,15 @@ Why first:
 
 ### Phase 3: OSTrack Matcher
 
-- [ ] Create `BigTracker/matcher_models/ostrack.py`.
-- [ ] Add `OSTrackMatcherConfig`.
-- [ ] Load yaml config and checkpoint once in `OSTrackMatcherModel.__init__`.
-- [ ] Build and store initial processed template plus `box_mask_z`.
-- [ ] Convert `track()` into `match()` using `SearchCandidate`.
-- [ ] Derive confidence from score-map peak statistics.
-- [ ] Implement `extract_template()` and `update_templates()` for latest-good and adaptive templates.
-- [ ] Add fake-network tests for `score_map -> MatchEvidence`.
-- [ ] Add optional real checkpoint smoke test behind an environment flag.
+- [x] ✅ Create `BigTracker/matcher_models/ostrack.py`.
+- [x] ✅ Add `OSTrackMatcherConfig`.
+- [x] ✅ Load yaml config and checkpoint once in `OSTrackMatcherModel.__init__`.
+- [x] ✅ Build and store initial processed template plus `box_mask_z`.
+- [x] ✅ Convert `track()` into `match()` using `SearchCandidate`.
+- [x] ✅ Derive confidence from score-map peak statistics.
+- [x] ✅ Implement `extract_template()` and `update_templates()` for latest-good and adaptive templates.
+- [x] ✅ Add fake-network tests for `score_map -> MatchEvidence`.
+- [x] ✅ Add optional real checkpoint smoke test behind an environment flag.
 
 Why second:
 

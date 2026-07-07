@@ -4,6 +4,11 @@ from BigTracker.matcher_models.nanotrack import (
     NanoTrackMatcherModel,
     NanoTrackTemplate,
 )
+from BigTracker.matcher_models.ostrack import (
+    OSTrackMatcherConfig,
+    OSTrackMatcherModel,
+    OSTrackTemplate,
+)
 
 
 __all__ = [
@@ -13,4 +18,7 @@ __all__ = [
     "NanoTrackMatcherConfig",
     "NanoTrackMatcherModel",
     "NanoTrackTemplate",
+    "OSTrackMatcherConfig",
+    "OSTrackMatcherModel",
+    "OSTrackTemplate",
 ]
