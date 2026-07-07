@@ -83,34 +83,96 @@ FFT_CONFIG = FftMatcherConfig(
 
 # NanoTrack source lives under ignores\Trackers, while model assets live under
 # ignores\Models.
+NANOTRACK_VARIANT = "nanotrackv3"
+NANOTRACK_VARIANTS = {
+    "nanotrackv1": {
+        "config_path": r"ignores\Models\nanotrack\config\configv1.yaml",
+        "checkpoint_path": r"ignores\Models\nanotrack\pretrained\nanotrackv1.pth",
+        "backbone_path": r"ignores\Models\nanotrack\nanotrackv1\nanotrack_backbone_sim.onnx",
+        "head_path": r"ignores\Models\nanotrack\nanotrackv1\nanotrack_head_sim.onnx",
+    },
+    "nanotrackv2": {
+        "config_path": r"ignores\Models\nanotrack\config\configv2.yaml",
+        "checkpoint_path": r"ignores\Models\nanotrack\pretrained\nanotrackv2.pth",
+        "backbone_path": r"ignores\Models\nanotrack\nanotrackv2\nanotrack_backbone_sim.onnx",
+        "head_path": r"ignores\Models\nanotrack\nanotrackv2\nanotrack_head_sim.onnx",
+    },
+    "nanotrackv3": {
+        "config_path": r"ignores\Models\nanotrack\config\configv3.yaml",
+        "checkpoint_path": r"ignores\Models\nanotrack\pretrained\nanotrackv3.pth",
+        "backbone_path": r"ignores\Models\nanotrack\nanotrackv3\nanotrack_backbone.onnx",
+        "head_path": r"ignores\Models\nanotrack\nanotrackv3\nanotrack_head.onnx",
+    },
+}
 NANOTRACK_CONFIG = NanoTrackMatcherConfig(
     backend="onnx",  # "torch" for .pth, or "onnx" for ONNX Runtime.
     source_root=r"ignores\Trackers\NanoTrack",
-    config_path=r"ignores\Models\nanotrack\config\configv3.yaml",
-    checkpoint_path=r"ignores\Models\nanotrack\pretrained\nanotrackv3.pth",
-    backbone_path=r"ignores\Models\nanotrack\nanotrackv3\nanotrack_backbone.onnx",
-    head_path=r"ignores\Models\nanotrack\nanotrackv3\nanotrack_head.onnx",
+    **NANOTRACK_VARIANTS[NANOTRACK_VARIANT],
     onnx_provider="cpu",  # Use "cuda" only with onnxruntime-gpu installed.
     device=None,
     max_best_templates=5,
 )
 
-# OSTrack source lives under ignores\Trackers, while model assets live under
-# ignores\Models.
+# OSTrack source lives under ignores\Trackers. Model config/checkpoint assets
+# live under ignores\Models.
+OSTRACK_VARIANT = "vitb_384_mae_ce_32x4_ep300"
+OSTRACK_VARIANTS = {
+    "vitb_256_mae_32x4_ep300": {
+        "config_path": r"ignores\Models\Ostrack\config\vitb_256_mae_32x4_ep300.yaml",
+        "checkpoint_path": r"ignores\Models\Ostrack\models\vitb_256_mae_32x4_ep300\OSTrack_ep0300.pth.tar",
+    },
+    "vitb_256_mae_ce_32x4_got10k_ep100": {
+        "config_path": r"ignores\Models\Ostrack\config\vitb_256_mae_ce_32x4_got10k_ep100.yaml",
+        "checkpoint_path": r"ignores\Models\Ostrack\models\vitb_256_mae_ce_32x4_got10k_ep100\OSTrack_ep0100.pth.tar",
+    },
+    "vitb_384_mae_32x4_ep300": {
+        "config_path": r"ignores\Models\Ostrack\config\vitb_384_mae_32x4_ep300.yaml",
+        "checkpoint_path": r"ignores\Models\Ostrack\models\vitb_384_mae_32x4_ep300\OSTrack_ep0300.pth.tar",
+    },
+    "vitb_384_mae_ce_32x4_ep300": {
+        "config_path": r"ignores\Models\Ostrack\config\vitb_384_mae_ce_32x4_ep300.yaml",
+        "checkpoint_path": r"ignores\Models\Ostrack\models\vitb_384_mae_ce_32x4_ep300\OSTrack_ep0300.pth.tar",
+    },
+    "vitb_384_mae_ce_32x4_got10k_ep100": {
+        "config_path": r"ignores\Models\Ostrack\config\vitb_384_mae_ce_32x4_got10k_ep100.yaml",
+        "checkpoint_path": r"ignores\Models\Ostrack\models\vitb_384_mae_ce_32x4_got10k_ep100\OSTrack_ep0100.pth.tar",
+    },
+}
 OSTRACK_CONFIG = OSTrackMatcherConfig(
     source_root=r"ignores\Trackers\OSTrack",
-    config_path=r"ignores\Trackers\OSTrack\experiments\ostrack\vitb_384_mae_ce_32x4_ep300.yaml",
-    checkpoint_path=r"ignores\Models\Ostrack\models\vitb_384_mae_ce_32x4_ep300\OSTrack_ep0300.pth.tar",
+    **OSTRACK_VARIANTS[OSTRACK_VARIANT],
     device=None,
     max_best_templates=5,
 )
 
-# LiteTrack source lives under ignores\Trackers, while model assets live under
-# ignores\Models.
+# LiteTrack source lives under ignores\Trackers. Model config/checkpoint assets
+# live under ignores\Models.
+LITETRACK_VARIANT = "B8_cae_center_all_ep300"
+LITETRACK_VARIANTS = {
+    "B6_cae_center_got10k_ep100": {
+        "config_path": r"ignores\Models\litetrack\config\B6_cae_center_got10k_ep100.yaml",
+        "checkpoint_path": r"ignores\Models\litetrack\B6_cae_center_got10k_ep100\LiteTrack_ep0100.pth.tar",
+    },
+    "B8_cae_center_all_ep300": {
+        "config_path": r"ignores\Models\litetrack\config\B8_cae_center_all_ep300.yaml",
+        "checkpoint_path": r"ignores\Models\litetrack\B8_cae_center_all_ep300\LiteTrack_ep0300.pth.tar",
+    },
+    "B8_cae_center_got10k_ep100": {
+        "config_path": r"ignores\Models\litetrack\config\B8_cae_center_got10k_ep100.yaml",
+        "checkpoint_path": r"ignores\Models\litetrack\B8_cae_center_got10k_ep100\LiteTrack_ep0100.pth.tar",
+    },
+    "B9_cae_center_all_ep300": {
+        "config_path": r"ignores\Models\litetrack\config\B9_cae_center_all_ep300.yaml",
+        "checkpoint_path": r"ignores\Models\litetrack\B9_cae_center_all_ep300\LiteTrack_ep0300.pth.tar",
+    },
+    "B9_cae_center_got10k_ep100": {
+        "config_path": r"ignores\Models\litetrack\config\B9_cae_center_got10k_ep100.yaml",
+        "checkpoint_path": r"ignores\Models\litetrack\B9_cae_center_got10k_ep100\LiteTrack_ep0100.pth.tar",
+    },
+}
 LITETRACK_CONFIG = LiteTrackMatcherConfig(
     source_root=r"ignores\Trackers\LiteTrack",
-    config_path=r"ignores\Trackers\LiteTrack\experiments\litetrack\B8_cae_center_all_ep300.yaml",
-    checkpoint_path=r"ignores\Models\litetrack\B8_cae_center_all_ep300\LiteTrack_ep0300.pth.tar",
+    **LITETRACK_VARIANTS[LITETRACK_VARIANT],
     device="cuda",
     max_best_templates=5,
 )
