@@ -46,6 +46,13 @@ class TimingStats:
             self._append(self.frame_ms, (now - self.last_frame_time) * 1000.0)
         self.last_frame_time = now
 
+    def reset_frame_clock(self, *, clear_samples: bool = False) -> None:
+        """Start a new frame-spacing run without counting paused time."""
+
+        self.last_frame_time = None
+        if clear_samples:
+            self.frame_ms.clear()
+
     def record_update_ms(self, value: float) -> None:
         """Record one tracker update duration in milliseconds."""
 
@@ -56,10 +63,10 @@ class TimingStats:
 
         frame_avg = _mean(self.frame_ms)
         update_avg = _mean(self.update_ms)
-        fps = 1000.0 / frame_avg if frame_avg > 0.0 else 0.0
+        fps_text = f"{1000.0 / frame_avg:5.1f}" if frame_avg > 0.0 else "  n/a"
         jitter = statistics.pstdev(self.frame_ms) if len(self.frame_ms) > 1 else 0.0
         p99 = _percentile(tuple(self.update_ms), 99.0)
-        return f"fps={fps:5.1f} jitter={jitter:5.1f}ms update={update_avg:5.1f}ms p99={p99:5.1f}ms"
+        return f"fps={fps_text} jitter={jitter:5.1f}ms update={update_avg:5.1f}ms p99={p99:5.1f}ms"
 
     def _append(self, values: Deque[float], value: float) -> None:
         """Append one timing sample with a fixed rolling limit."""
@@ -173,17 +180,21 @@ class FullTestRunner:
             self.quit_requested = True
         elif key == ord(" "):
             self.paused = not self.paused
+            self.timing.reset_frame_clock(clear_samples=True)
         elif key == ord("c"):
             self.continuous = not self.continuous
             self.paused = not self.continuous
+            self.timing.reset_frame_clock(clear_samples=True)
         elif key == ord("n"):
             self.frame_step_requested = True
             self.paused = True
+            self.timing.reset_frame_clock(clear_samples=True)
         elif key == ord("i"):
             self._initialize_tracker_from_roi()
         elif key == ord("r"):
             self.tracker.reset()
             self.latest_output = None
+            self.timing.reset_frame_clock(clear_samples=True)
             print("Tracker reset.")
         elif key in (ord("+"), ord("=")):
             self._keyboard_zoom(1.25)
@@ -214,6 +225,7 @@ class FullTestRunner:
         box = _display_box_to_image_box((float(x), float(y), float(width), float(height)), self.view)
         self.tracker.initialize(self.current_frame, box)
         self.latest_output = self.tracker.get_output()
+        self.timing.reset_frame_clock(clear_samples=True)
         print(f"Tracker initialized: box={_fmt_box(box)}")
         self._print_state(self.current_frame, force=True)
 
