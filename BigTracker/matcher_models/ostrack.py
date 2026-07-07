@@ -386,7 +386,7 @@ def _load_real_ostrack_backend(
 
     source_root = Path(config.source_root)
     config_path = Path(config.config_path) if config.config_path else (
-        source_root / "experiments/ostrack/vitb_384_mae_ce_32x4_ep300.yaml"
+        Path("ignores/Models/Ostrack/config/vitb_384_mae_ce_32x4_ep300.yaml")
     )
     checkpoint_path = Path(config.checkpoint_path) if config.checkpoint_path else (
         Path("ignores/Models/Ostrack/models/vitb_384_mae_ce_32x4_ep300/OSTrack_ep0300.pth.tar")

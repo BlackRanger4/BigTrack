@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sys
 import unittest
 
 from BigTracker.big_trackers.simple import SimpleBigTrack
@@ -205,10 +206,14 @@ class LiteTrackMatcherTest(unittest.TestCase):
             )
 
         np = _require_numpy()
-        config_path = Path(r"ignores\Trackers\LiteTrack\experiments\litetrack\B8_cae_center_all_ep300.yaml")
+        config_path = Path(r"ignores\Models\litetrack\config\B8_cae_center_all_ep300.yaml")
         checkpoint_path = Path(r"ignores\Models\litetrack\B8_cae_center_all_ep300\LiteTrack_ep0300.pth.tar")
         if not config_path.exists() or not checkpoint_path.exists():
             raise unittest.SkipTest("LiteTrack config/checkpoint assets are not present")
+        loaded_lib = sys.modules.get("lib")
+        loaded_lib_file = getattr(loaded_lib, "__file__", "") if loaded_lib is not None else ""
+        if loaded_lib_file and "OSTrack" in loaded_lib_file:
+            raise unittest.SkipTest("OSTrack top-level lib package is already loaded")
 
         image = np.zeros((240, 320, 3), dtype=np.uint8)
         frame = _Frame(image=image, idx=0, timestamp=0.0)

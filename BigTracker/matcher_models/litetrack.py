@@ -373,7 +373,7 @@ def _load_real_litetrack_backend(
 
     source_root = Path(config.source_root)
     config_path = Path(config.config_path) if config.config_path else (
-        source_root / "experiments/litetrack/B8_cae_center_all_ep300.yaml"
+        Path("ignores/Models/litetrack/config/B8_cae_center_all_ep300.yaml")
     )
     checkpoint_path = Path(config.checkpoint_path) if config.checkpoint_path else (
         Path("ignores/Models/litetrack/B8_cae_center_all_ep300/LiteTrack_ep0300.pth.tar")
