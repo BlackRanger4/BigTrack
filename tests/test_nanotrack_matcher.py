@@ -8,6 +8,8 @@ from BigTracker.matcher_models.nanotrack import (
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
     NanoTrackTemplate,
+    _SplitNanoTrackOnnxBackend,
+    _SplitNanoTrackTorchBackend,
 )
 from BigTracker.predictor_models.kalman import KalmanPredictorModel
 from BigTracker.state import MatcherState, SearchCandidate
@@ -46,6 +48,59 @@ class _FakeNanoTrackBackend:
         cls[:, 1, 1, 1] = 8.0
         loc = torch.full((1, 4, 3, 3), 10.0, dtype=torch.float32)
         return {"cls": cls, "loc": loc}
+
+
+class _FakeNanoTrackModel:
+    def __init__(self) -> None:
+        self.eval_count = 0
+        self.template_count = 0
+        self.track_count = 0
+        self.zf = None
+        self.track_features = []
+
+    def eval(self):
+        self.eval_count += 1
+        return self
+
+    def template(self, z):
+        self.template_count += 1
+        self.zf = {"from_template_model": True, "shape": tuple(z.shape)}
+        return None
+
+    def track(self, x):
+        self.track_count += 1
+        self.track_features.append(self.zf)
+        return {"cls": x, "loc": x}
+
+
+class _FakeOnnxInput:
+    def __init__(self, name, shape):
+        self.name = name
+        self.shape = shape
+
+
+class _FakeOnnxSession:
+    def __init__(self, inputs, output):
+        self._inputs = inputs
+        self.output = output
+        self.calls = []
+
+    def get_inputs(self):
+        return self._inputs
+
+    def run(self, output_names, feed):
+        self.calls.append(feed)
+        return [self.output]
+
+
+class _FakeOnnxHeadSession(_FakeOnnxSession):
+    def __init__(self, inputs, cls_output, loc_output):
+        super().__init__(inputs, cls_output)
+        self.loc_output = loc_output
+
+    def run(self, output_names, feed):
+        self.calls.append(feed)
+        return [self.output, self.loc_output]
 
 
 class NanoTrackMatcherTest(unittest.TestCase):
@@ -164,6 +219,58 @@ class NanoTrackMatcherTest(unittest.TestCase):
         self.assertGreater(output.confidence, 0.9)
         self.assertEqual(backend.track_count, 1)
 
+    def test_split_torch_backend_keeps_template_and_search_models_separate(self) -> None:
+        template_model = _FakeNanoTrackModel()
+        search_model = _FakeNanoTrackModel()
+        backend = _SplitNanoTrackTorchBackend(template_model, search_model)
+
+        backend.eval()
+        template_features = backend.template(_FakeTensor((1, 3, 31, 31)))
+        outputs = backend.track(_FakeTensor((1, 3, 63, 63)))
+
+        self.assertEqual(template_model.eval_count, 1)
+        self.assertEqual(search_model.eval_count, 1)
+        self.assertEqual(template_model.template_count, 1)
+        self.assertEqual(search_model.template_count, 0)
+        self.assertEqual(template_model.track_count, 0)
+        self.assertEqual(search_model.track_count, 1)
+        self.assertIs(search_model.track_features[0], template_features)
+        self.assertEqual(outputs["cls"].shape, (1, 3, 63, 63))
+
+    def test_split_onnx_backend_uses_separate_template_and_search_backbones(self) -> None:
+        np = _require_numpy()
+        template_output = np.ones((1, 96, 16, 16), dtype=np.float32)
+        search_output = np.full((1, 96, 16, 16), 2.0, dtype=np.float32)
+        cls_output = np.zeros((1, 2, 3, 3), dtype=np.float32)
+        loc_output = np.zeros((1, 4, 3, 3), dtype=np.float32)
+        template_session = _FakeOnnxSession([_FakeOnnxInput("input", [1, 3, 255, 255])], template_output)
+        search_session = _FakeOnnxSession([_FakeOnnxInput("input", [1, 3, 255, 255])], search_output)
+        head_session = _FakeOnnxHeadSession(
+            [
+                _FakeOnnxInput("input1", [1, 96, 8, 8]),
+                _FakeOnnxInput("input2", [1, 96, 16, 16]),
+            ],
+            cls_output,
+            loc_output,
+        )
+        backend = _SplitNanoTrackOnnxBackend(template_session, search_session, head_session)
+
+        zf = backend.template(np.zeros((1, 3, 127, 127), dtype=np.float32))
+        outputs = backend.track(np.zeros((1, 3, 255, 255), dtype=np.float32))
+
+        self.assertEqual(template_session.calls[0]["input"].shape, (1, 3, 255, 255))
+        self.assertEqual(search_session.calls[0]["input"].shape, (1, 3, 255, 255))
+        self.assertEqual(zf.shape, (1, 96, 8, 8))
+        self.assertIs(head_session.calls[0]["input1"], zf)
+        self.assertIs(head_session.calls[0]["input2"], search_output)
+        self.assertIs(outputs["cls"], cls_output)
+        self.assertIs(outputs["loc"], loc_output)
+
+
+class _FakeTensor:
+    def __init__(self, shape):
+        self.shape = shape
+
 
 def _require_numpy():
     try:
@@ -183,4 +290,3 @@ def _require_torch():
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -96,9 +96,9 @@ BigTracker mapping:
 
 - `__init__(...)`
   - load NanoTrack config
-  - build model
-  - load checkpoint
-  - move model to device and set eval mode
+  - build separate template-backbone and search-backbone model instances, because template/search shapes differ and shape switching is costly on GPU runtimes
+  - load the same checkpoint into both model instances
+  - move both models to device and set eval mode
   - precompute static point/window tensors
 - `initialize_template(...)`
   - crop template from `frame.image`
@@ -127,6 +127,8 @@ BigTracker mapping:
 Implementation risk:
 
 - NanoTrack uses global `cfg`; adapter config must avoid mutating global settings unexpectedly across tests.
+- NanoTrack template and search crops use different input shapes. Keep separate template/search backend instances for PyTorch, ONNX, and later TensorRT paths instead of reusing one dynamic-shape runtime object.
+- ONNX Runtime backend should use separate template/search backbone sessions. If `onnx_provider="cuda"` is requested and `CUDAExecutionProvider` is not installed, fail fast instead of silently falling back to CPU.
 - Original code clips target size to at least 10 pixels. Preserve this in matcher output metadata and let `BigTrack` decide whether that evidence is acceptable.
 
 ### OSTrack

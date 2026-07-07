@@ -37,9 +37,15 @@ BackendFactory = Callable[["NanoTrackMatcherConfig"], NanoTrackBackend]
 class NanoTrackMatcherConfig:
     """Configuration for the NanoTrack matcher wrapper."""
 
+    backend: str = "torch"
     source_root: str = "ignores/Trackers/NanoTrack"
     config_path: Optional[str] = None
     checkpoint_path: Optional[str] = None
+    backbone_path: Optional[str] = None
+    template_backbone_path: Optional[str] = None
+    search_backbone_path: Optional[str] = None
+    head_path: Optional[str] = None
+    onnx_provider: str = "cpu"
     device: Optional[str] = None
     max_best_templates: int = 5
     context_amount: float = 0.5
@@ -81,7 +87,12 @@ class NanoTrackMatcherModel(MatcherModel):
         """Load NanoTrack model/config/checkpoint once and precompute static arrays."""
 
         self.config = config or NanoTrackMatcherConfig()
-        self.device = resolve_device(self.config.device) if backend is None else None
+        needs_torch_device = (
+            backend is None
+            and backend_factory is None
+            and _normalized_backend_name(self.config.backend) == "torch"
+        )
+        self.device = resolve_device(self.config.device) if needs_torch_device else None
         if backend is not None:
             self.backend = backend
         elif backend_factory is not None:
@@ -244,8 +255,11 @@ class NanoTrackMatcherModel(MatcherModel):
         """Run backend.template and snapshot its encoded template feature."""
 
         tensor = self._to_backend_input(crop)
-        with inference_context():
+        if getattr(self.backend, "expects_numpy", False):
             returned = self.backend.template(tensor)
+        else:
+            with inference_context():
+                returned = self.backend.template(tensor)
         feature_state = returned if returned is not None else getattr(self.backend, "zf", None)
         return _snapshot_feature_state(feature_state)
 
@@ -253,12 +267,17 @@ class NanoTrackMatcherModel(MatcherModel):
         """Run backend.track under inference mode."""
 
         tensor = self._to_backend_input(crop)
+        if getattr(self.backend, "expects_numpy", False):
+            return self.backend.track(tensor)
         with inference_context():
             return self.backend.track(tensor)
 
     def _to_backend_input(self, value: Any) -> Any:
         """Convert numpy crops to torch tensors and move them to the backend device."""
 
+        if getattr(self.backend, "expects_numpy", False):
+            np = _require_numpy()
+            return np.asarray(value, dtype=np.float32)
         torch = _require_torch()
         if not torch.is_tensor(value):
             value = torch.from_numpy(value)
@@ -314,8 +333,8 @@ class NanoTrackMatcherModel(MatcherModel):
         """Convert raw NanoTrack classification output to positive-class scores."""
 
         np = _require_numpy()
-        torch = _require_torch()
-        if torch.is_tensor(score):
+        torch = _optional_torch()
+        if torch is not None and torch.is_tensor(score):
             if self.config.cls_out_channels == 1:
                 return score.permute(1, 2, 3, 0).contiguous().view(-1).sigmoid().detach().cpu().numpy()
             score = score.permute(1, 2, 3, 0).contiguous().view(self.config.cls_out_channels, -1)
@@ -325,6 +344,8 @@ class NanoTrackMatcherModel(MatcherModel):
         array = np.asarray(score)
         if array.ndim == 1:
             return array.astype("float64", copy=False)
+        if array.ndim == 4 and array.shape[1] == self.config.cls_out_channels:
+            array = array.transpose(0, 2, 3, 1).reshape(-1, self.config.cls_out_channels)
         if array.shape[0] == self.config.cls_out_channels:
             array = array.reshape(self.config.cls_out_channels, -1).transpose(1, 0)
         if array.shape[-1] == 2:
@@ -336,12 +357,14 @@ class NanoTrackMatcherModel(MatcherModel):
         """Convert raw NanoTrack location output to center-size predictions."""
 
         np = _require_numpy()
-        torch = _require_torch()
-        if torch.is_tensor(delta):
+        torch = _optional_torch()
+        if torch is not None and torch.is_tensor(delta):
             delta = delta.permute(1, 2, 3, 0).contiguous().view(4, -1).detach().cpu().numpy()
         else:
             delta = np.asarray(delta)
-            if delta.shape[0] != 4:
+            if delta.ndim == 4 and delta.shape[1] == 4:
+                delta = delta.transpose(1, 2, 3, 0).reshape(4, -1)
+            elif delta.shape[0] != 4:
                 delta = delta.reshape(4, -1)
 
         points = self._points_for_prediction_count(delta.shape[1])
@@ -482,11 +505,94 @@ class NanoTrackMatcherModel(MatcherModel):
         return self._generate_window(size)
 
 
+class _SplitNanoTrackTorchBackend:
+    """Use separate NanoTrack model instances for template and search paths."""
+
+    def __init__(self, template_model: Any, search_model: Any) -> None:
+        self.template_model = template_model
+        self.search_model = search_model
+        self.zf = None
+
+    def eval(self) -> "_SplitNanoTrackTorchBackend":
+        self.template_model.eval()
+        self.search_model.eval()
+        return self
+
+    def template(self, z: Any) -> Any:
+        returned = self.template_model.template(z)
+        self.zf = returned if returned is not None else getattr(self.template_model, "zf", None)
+        return self.zf
+
+    def track(self, x: Any) -> Mapping[str, Any]:
+        setattr(self.search_model, "zf", self.zf)
+        return self.search_model.track(x)
+
+
+class _SplitNanoTrackOnnxBackend:
+    """Use separate ONNX Runtime backbone sessions for template and search paths."""
+
+    expects_numpy = True
+
+    def __init__(
+        self,
+        template_backbone_session: Any,
+        search_backbone_session: Any,
+        head_session: Any,
+    ) -> None:
+        self.template_backbone_session = template_backbone_session
+        self.search_backbone_session = search_backbone_session
+        self.head_session = head_session
+        self.zf = None
+
+    def eval(self) -> "_SplitNanoTrackOnnxBackend":
+        return self
+
+    def template(self, z: Any) -> Any:
+        template_feature = self._run_backbone(self.template_backbone_session, z)
+        target_hw = _session_input_hw(self.head_session, 0)
+        self.zf = _center_crop_feature(template_feature, target_hw)
+        return self.zf
+
+    def track(self, x: Any) -> Mapping[str, Any]:
+        if self.zf is None:
+            raise RuntimeError("NanoTrack ONNX template features are not initialized")
+
+        search_feature = self._run_backbone(self.search_backbone_session, x)
+        head_inputs = self.head_session.get_inputs()
+        outputs = self.head_session.run(
+            None,
+            {
+                head_inputs[0].name: self.zf,
+                head_inputs[1].name: search_feature,
+            },
+        )
+        return {"cls": outputs[0], "loc": outputs[1]}
+
+    def _run_backbone(self, session: Any, crop: Any) -> Any:
+        session_input = session.get_inputs()[0]
+        array = _fit_onnx_backbone_input(crop, _input_hw(session_input))
+        return session.run(None, {session_input.name: array})[0]
+
+
 def _load_real_nanotrack_backend(
     config: NanoTrackMatcherConfig,
     device: Any,
 ) -> tuple[NanoTrackBackend, NanoTrackMatcherConfig]:
-    """Load NanoTrack source modules, config, model, and checkpoint."""
+    """Load NanoTrack source modules/config and the requested backend."""
+
+    backend = _normalized_backend_name(config.backend)
+    if backend == "torch":
+        return _load_real_nanotrack_torch_backend(config, device)
+    if backend == "onnx":
+        return _load_real_nanotrack_onnx_backend(config)
+    raise ValueError("NanoTrack backend must be 'torch'/'pth' or 'onnx'")
+
+
+def _load_real_nanotrack_torch_backend(
+    config: NanoTrackMatcherConfig,
+    device: Any,
+) -> tuple[NanoTrackBackend, NanoTrackMatcherConfig]:
+    """Load NanoTrack source modules, config, split torch models, and checkpoint."""
 
     source_root = Path(config.source_root)
     config_path = Path(config.config_path) if config.config_path else source_root / "models/config/configv3.yaml"
@@ -511,17 +617,46 @@ def _load_real_nanotrack_backend(
 
         cfg.merge_from_file(str(config_path))
         effective_config = _config_from_loaded_nanotrack_cfg(config, cfg)
-        model = ModelBuilder()
-        _load_nanotrack_checkpoint(model, str(checkpoint_path))
-        model = model.to(device)
-        model.eval()
-        return model, effective_config
+        template_model = ModelBuilder()
+        search_model = ModelBuilder()
+        _load_nanotrack_checkpoint(template_model, str(checkpoint_path))
+        _load_nanotrack_checkpoint(search_model, str(checkpoint_path))
+        template_model = template_model.to(device)
+        search_model = search_model.to(device)
+        return _SplitNanoTrackTorchBackend(template_model, search_model), effective_config
     finally:
         if inserted:
             try:
                 sys.path.remove(source_root_str)
             except ValueError:
                 pass
+
+
+def _load_real_nanotrack_onnx_backend(
+    config: NanoTrackMatcherConfig,
+) -> tuple[NanoTrackBackend, NanoTrackMatcherConfig]:
+    """Load split NanoTrack ONNX Runtime sessions."""
+
+    config_path = _resolve_nanotrack_config_path(config)
+    if not config_path.exists():
+        raise FileNotFoundError(f"NanoTrack config does not exist: {config_path}")
+
+    template_backbone_path, search_backbone_path, head_path = _resolve_onnx_paths(config, config_path)
+    for label, path in (
+        ("NanoTrack ONNX template backbone", template_backbone_path),
+        ("NanoTrack ONNX search backbone", search_backbone_path),
+        ("NanoTrack ONNX head", head_path),
+    ):
+        if not path.exists():
+            raise FileNotFoundError(f"{label} does not exist: {path}")
+
+    ort = _require_onnxruntime()
+    providers = _onnx_providers(config.onnx_provider, ort)
+    template_session = ort.InferenceSession(str(template_backbone_path), providers=providers)
+    search_session = ort.InferenceSession(str(search_backbone_path), providers=providers)
+    head_session = ort.InferenceSession(str(head_path), providers=providers)
+    effective_config = _config_from_nanotrack_yaml(config, config_path)
+    return _SplitNanoTrackOnnxBackend(template_session, search_session, head_session), effective_config
 
 
 def _snapshot_feature_state(value: Any) -> Any:
@@ -558,6 +693,62 @@ def _load_nanotrack_checkpoint(model: Any, checkpoint_path: str) -> None:
     model.load_state_dict(state_dict, strict=False)
 
 
+def _resolve_nanotrack_config_path(config: NanoTrackMatcherConfig) -> Path:
+    source_root = Path(config.source_root)
+    return Path(config.config_path) if config.config_path else source_root / "models/config/configv3.yaml"
+
+
+def _resolve_onnx_paths(config: NanoTrackMatcherConfig, config_path: Path) -> tuple[Path, Path, Path]:
+    base_backbone_path = Path(config.backbone_path) if config.backbone_path else None
+    template_backbone_path = (
+        Path(config.template_backbone_path)
+        if config.template_backbone_path
+        else base_backbone_path
+    )
+    search_backbone_path = (
+        Path(config.search_backbone_path)
+        if config.search_backbone_path
+        else base_backbone_path
+    )
+    head_path = Path(config.head_path) if config.head_path else None
+
+    if template_backbone_path is not None and search_backbone_path is not None and head_path is not None:
+        return template_backbone_path, search_backbone_path, head_path
+
+    default_backbone_path, default_head_path = _default_onnx_paths(config, config_path)
+    return (
+        template_backbone_path or default_backbone_path,
+        search_backbone_path or default_backbone_path,
+        head_path or default_head_path,
+    )
+
+
+def _default_onnx_paths(config: NanoTrackMatcherConfig, config_path: Path) -> tuple[Path, Path]:
+    model_root = config_path.parent.parent if config.config_path else Path(config.source_root) / "models"
+    version_name = config_path.stem.replace("config", "nanotrack", 1)
+    version_dir = model_root / version_name
+    backbone_candidates = (
+        version_dir / "nanotrack_backbone.onnx",
+        version_dir / "nanotrack_backbone_sim.onnx",
+        model_root / "onnx/nanotrack_backbone.onnx",
+        model_root / "onnx/nanotrack_backbone_sim.onnx",
+    )
+    head_candidates = (
+        version_dir / "nanotrack_head.onnx",
+        version_dir / "nanotrack_head_sim.onnx",
+        model_root / "onnx/nanotrack_head.onnx",
+        model_root / "onnx/nanotrack_head_sim.onnx",
+    )
+    return _first_existing_or_first(backbone_candidates), _first_existing_or_first(head_candidates)
+
+
+def _first_existing_or_first(paths: Sequence[Path]) -> Path:
+    for path in paths:
+        if path.exists():
+            return path
+    return paths[0]
+
+
 def _config_from_loaded_nanotrack_cfg(
     config: NanoTrackMatcherConfig,
     cfg: Any,
@@ -575,6 +766,129 @@ def _config_from_loaded_nanotrack_cfg(
         window_influence=float(cfg.TRACK.WINDOW_INFLUENCE),
         lr=float(cfg.TRACK.LR),
     )
+
+
+def _config_from_nanotrack_yaml(
+    config: NanoTrackMatcherConfig,
+    config_path: Path,
+) -> NanoTrackMatcherConfig:
+    """Return matcher config synchronized with a NanoTrack YAML file."""
+
+    try:
+        import yaml
+    except ImportError as error:
+        raise RuntimeError("NanoTrack ONNX backend requires PyYAML to read config files") from error
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw_config = yaml.safe_load(handle) or {}
+    track_config = raw_config.get("TRACK", {})
+    point_config = raw_config.get("POINT", {})
+
+    return replace(
+        config,
+        context_amount=float(track_config.get("CONTEXT_AMOUNT", config.context_amount)),
+        exemplar_size=int(track_config.get("EXEMPLAR_SIZE", config.exemplar_size)),
+        instance_size=int(track_config.get("INSTANCE_SIZE", config.instance_size)),
+        output_size=int(track_config.get("OUTPUT_SIZE", config.output_size)),
+        point_stride=int(point_config.get("STRIDE", config.point_stride)),
+        penalty_k=float(track_config.get("PENALTY_K", config.penalty_k)),
+        window_influence=float(track_config.get("WINDOW_INFLUENCE", config.window_influence)),
+        lr=float(track_config.get("LR", config.lr)),
+    )
+
+
+def _normalized_backend_name(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"torch", "pth", "pytorch"}:
+        return "torch"
+    if normalized == "onnx":
+        return "onnx"
+    return normalized
+
+
+def _require_onnxruntime() -> Any:
+    try:
+        import onnxruntime as ort
+    except ImportError as error:
+        raise RuntimeError("NanoTrack ONNX backend requires onnxruntime") from error
+    return ort
+
+
+def _onnx_providers(provider: str, ort: Any) -> list[str]:
+    normalized = str(provider).strip().lower()
+    if normalized in {"cpu", "default"}:
+        return ["CPUExecutionProvider"]
+    if normalized in {"cuda", "gpu"}:
+        available = list(ort.get_available_providers())
+        if "CUDAExecutionProvider" not in available:
+            raise RuntimeError(
+                "NanoTrack ONNX CUDA requested, but CUDAExecutionProvider is not available. "
+                f"Installed ONNX Runtime providers: {available}"
+            )
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    raise ValueError("NanoTrack ONNX provider must be 'cpu' or 'cuda'")
+
+
+def _input_hw(session_input: Any) -> Optional[tuple[int, int]]:
+    shape = getattr(session_input, "shape", None)
+    if shape is None or len(shape) < 4:
+        return None
+    height, width = shape[-2], shape[-1]
+    if isinstance(height, int) and isinstance(width, int):
+        return int(height), int(width)
+    return None
+
+
+def _session_input_hw(session: Any, input_index: int) -> Optional[tuple[int, int]]:
+    inputs = session.get_inputs()
+    if input_index >= len(inputs):
+        return None
+    return _input_hw(inputs[input_index])
+
+
+def _fit_onnx_backbone_input(value: Any, expected_hw: Optional[tuple[int, int]]) -> Any:
+    np = _require_numpy()
+    array = np.asarray(value, dtype=np.float32)
+    if expected_hw is None:
+        return array
+
+    expected_height, expected_width = expected_hw
+    current_height, current_width = array.shape[-2], array.shape[-1]
+    if (current_height, current_width) == (expected_height, expected_width):
+        return array
+
+    if current_height > expected_height or current_width > expected_width:
+        top = max(0, (current_height - expected_height) // 2)
+        left = max(0, (current_width - expected_width) // 2)
+        return array[..., top : top + expected_height, left : left + expected_width]
+
+    pad_shape = array.shape[:-2] + (expected_height, expected_width)
+    padded = np.empty(pad_shape, dtype=np.float32)
+    fill_value = array.mean(axis=(-2, -1), keepdims=True)
+    padded[...] = fill_value
+    top = (expected_height - current_height) // 2
+    left = (expected_width - current_width) // 2
+    padded[..., top : top + current_height, left : left + current_width] = array
+    return padded
+
+
+def _center_crop_feature(value: Any, target_hw: Optional[tuple[int, int]]) -> Any:
+    np = _require_numpy()
+    array = np.asarray(value, dtype=np.float32)
+    if target_hw is None:
+        return array
+    target_height, target_width = target_hw
+    current_height, current_width = array.shape[-2], array.shape[-1]
+    if (current_height, current_width) == (target_height, target_width):
+        return array
+    if current_height < target_height or current_width < target_width:
+        raise ValueError(
+            "NanoTrack ONNX backbone feature is smaller than head input: "
+            f"feature={(current_height, current_width)} head_input={target_hw}"
+        )
+    top = (current_height - target_height) // 2
+    left = (current_width - target_width) // 2
+    return array[..., top : top + target_height, left : left + target_width]
 
 
 def _square_size_from_count(count: int, label: str) -> int:
@@ -626,4 +940,12 @@ def _require_torch() -> Any:
         import torch
     except ImportError as error:
         raise RuntimeError("NanoTrackMatcherModel requires torch") from error
+    return torch
+
+
+def _optional_torch() -> Any:
+    try:
+        import torch
+    except ImportError:
+        return None
     return torch

@@ -80,9 +80,13 @@ FFT_CONFIG = FftMatcherConfig(
 # NanoTrack source lives under ignores\Trackers, while model assets live under
 # ignores\Models.
 NANOTRACK_CONFIG = NanoTrackMatcherConfig(
+    backend="onnx",  # "torch" for .pth, or "onnx" for ONNX Runtime.
     source_root=r"ignores\Trackers\NanoTrack",
     config_path=r"ignores\Models\nanotrack\config\configv3.yaml",
     checkpoint_path=r"ignores\Models\nanotrack\pretrained\nanotrackv3.pth",
+    backbone_path=r"ignores\Models\nanotrack\nanotrackv3\nanotrack_backbone.onnx",
+    head_path=r"ignores\Models\nanotrack\nanotrackv3\nanotrack_head.onnx",
+    onnx_provider="cpu",  # Use "cuda" only with onnxruntime-gpu installed.
     device=None,
     max_best_templates=5,
 )
