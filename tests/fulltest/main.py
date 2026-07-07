@@ -13,6 +13,8 @@ from BigTracker import (  # noqa: E402
     FftMatcherModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
+    LiteTrackMatcherConfig,
+    LiteTrackMatcherModel,
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
     OSTrackMatcherConfig,
@@ -62,8 +64,8 @@ KALMAN_CONFIG = KalmanPredictorConfig(
 # Matcher config
 # -----------------------------------------------------------------------------
 
-# Current supported values: "fft", "nanotrack", "ostrack".
-MATCHER_KIND = "ostrack"
+# Current supported values: "fft", "nanotrack", "ostrack", "litetrack".
+MATCHER_KIND = "litetrack"
 
 # template_area_factor controls template crop size around the initialized target.
 # search_area_factor controls search crop size around the predicted target center.
@@ -99,6 +101,16 @@ OSTRACK_CONFIG = OSTrackMatcherConfig(
     source_root=r"ignores\Trackers\OSTrack",
     config_path=r"ignores\Trackers\OSTrack\experiments\ostrack\vitb_384_mae_ce_32x4_ep300.yaml",
     checkpoint_path=r"ignores\Models\Ostrack\models\vitb_384_mae_ce_32x4_ep300\OSTrack_ep0300.pth.tar",
+    device=None,
+    max_best_templates=5,
+)
+
+# LiteTrack source lives under ignores\Trackers, while model assets live under
+# ignores\Models.
+LITETRACK_CONFIG = LiteTrackMatcherConfig(
+    source_root=r"ignores\Trackers\LiteTrack",
+    config_path=r"ignores\Trackers\LiteTrack\experiments\litetrack\B8_cae_center_all_ep300.yaml",
+    checkpoint_path=r"ignores\Models\litetrack\B8_cae_center_all_ep300\LiteTrack_ep0300.pth.tar",
     device="cuda",
     max_best_templates=5,
 )
@@ -170,6 +182,8 @@ def _build_matcher():
         return NanoTrackMatcherModel(NANOTRACK_CONFIG)
     if MATCHER_KIND == "ostrack":
         return OSTrackMatcherModel(OSTRACK_CONFIG)
+    if MATCHER_KIND == "litetrack":
+        return LiteTrackMatcherModel(LITETRACK_CONFIG)
     raise ValueError(f"Unknown MATCHER_KIND: {MATCHER_KIND!r}")
 
 

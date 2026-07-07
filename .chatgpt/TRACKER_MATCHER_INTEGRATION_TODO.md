@@ -389,17 +389,17 @@ Why second:
 
 ### Phase 4: LiteTrack Matcher
 
-- [ ] Create `BigTracker/matcher_models/litetrack.py`.
-- [ ] Add `LiteTrackMatcherConfig`.
-- [ ] Load yaml config and checkpoint once in `LiteTrackMatcherModel.__init__`.
-- [ ] Reuse OSTrack-style crop and map-back helpers.
-- [ ] Build initial `z_feat` with `forward_z(...)`.
-- [ ] Convert `track_center()` into `match()`.
-- [ ] Return `MatchEvidence` from center-head output.
-- [ ] Implement approved template extraction as recomputing `z_feat`.
-- [ ] Implement latest-good bank and adaptive-template selection.
-- [ ] Add fake-network tests.
-- [ ] Add optional real checkpoint smoke test behind an environment flag.
+- [x] ✅ Create `BigTracker/matcher_models/litetrack.py`.
+- [x] ✅ Add `LiteTrackMatcherConfig`.
+- [x] ✅ Load yaml config and checkpoint once in `LiteTrackMatcherModel.__init__`.
+- [x] ✅ Reuse OSTrack-style crop and map-back helpers.
+- [x] ✅ Build initial `z_feat` with `forward_z(...)`.
+- [x] ✅ Convert `track_center()` into `match()`.
+- [x] ✅ Return `MatchEvidence` from center-head output.
+- [x] ✅ Implement approved template extraction as recomputing `z_feat`.
+- [x] ✅ Implement latest-good bank and adaptive-template selection.
+- [x] ✅ Add fake-network tests.
+- [x] ✅ Add optional real checkpoint smoke test behind an environment flag.
 
 Why third:
 
