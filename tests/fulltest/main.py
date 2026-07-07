@@ -13,6 +13,8 @@ from BigTracker import (  # noqa: E402
     FftMatcherModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
+    NanoTrackMatcherConfig,
+    NanoTrackMatcherModel,
     SimpleBigTrack,
 )
 from tests.fulltest.frame_source import build_frame_source  # noqa: E402
@@ -58,7 +60,7 @@ KALMAN_CONFIG = KalmanPredictorConfig(
 # Matcher config
 # -----------------------------------------------------------------------------
 
-# Current supported value: "fft".
+# Current supported values: "fft", "nanotrack".
 MATCHER_KIND = "fft"
 
 # template_area_factor controls template crop size around the initialized target.
@@ -73,6 +75,17 @@ FFT_CONFIG = FftMatcherConfig(
     min_crop_size=16,
     max_best_templates=5,
     peak_exclusion_radius=8,
+)
+
+# NanoTrack requires real config/checkpoint files. The ignored source checkout
+# does not currently include the default files, so update these paths before
+# setting MATCHER_KIND = "nanotrack".
+NANOTRACK_CONFIG = NanoTrackMatcherConfig(
+    source_root=r"ignores\Trackers\NanoTrack",
+    config_path=r"ignores\Trackers\NanoTrack\models\config\configv3.yaml",
+    checkpoint_path=r"ignores\Trackers\NanoTrack\models\pretrained\nanotrackv3.pth",
+    device=None,
+    max_best_templates=5,
 )
 
 
@@ -138,6 +151,8 @@ def _build_matcher():
 
     if MATCHER_KIND == "fft":
         return FftMatcherModel(FFT_CONFIG)
+    if MATCHER_KIND == "nanotrack":
+        return NanoTrackMatcherModel(NANOTRACK_CONFIG)
     raise ValueError(f"Unknown MATCHER_KIND: {MATCHER_KIND!r}")
 
 
