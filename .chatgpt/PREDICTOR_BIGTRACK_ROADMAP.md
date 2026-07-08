@@ -234,20 +234,20 @@ Acceptance:
 
 ### Phase 2: ScoreGatedBigTrack
 
-- [ ] Create `ScoreGatedBigTrackConfig`.
-- [ ] Create `ScoreGatedBigTrack`.
-- [ ] Implement one-candidate tracking mode first.
-- [ ] Implement accept/uncertain/reject decisions.
-- [ ] Enable template updates only when:
+- [x] Create `ScoreGatedBigTrackConfig`.
+- [x] Create `ScoreGatedBigTrack`.
+- [x] Implement one-candidate tracking mode first.
+- [x] Implement accept/uncertain/reject decisions.
+- [x] Enable template updates only when:
   - accepted
   - score above template threshold
   - ambiguity below threshold
   - scale score above threshold
   - not clipped
   - mode is stable enough
-- [ ] Update exports from `BigTracker/big_trackers/__init__.py` and `BigTracker/__init__.py`.
-- [ ] Add fake matcher tests proving template updates happen only after clean accepts.
-- [ ] Add `tests/fulltest/main.py` selector support:
+- [x] Update exports from `BigTracker/big_trackers/__init__.py` and `BigTracker/__init__.py`.
+- [x] Add fake matcher tests proving template updates happen only after clean accepts.
+- [x] Add `tests/fulltest/main.py` selector support:
   - `POLICY_KIND = "simple"`
   - `POLICY_KIND = "score_gated"`
 

@@ -21,6 +21,8 @@ from BigTracker import (  # noqa: E402
     NanoTrackMatcherModel,
     OSTrackMatcherConfig,
     OSTrackMatcherModel,
+    ScoreGatedBigTrack,
+    ScoreGatedBigTrackConfig,
     SimpleBigTrack,
 )
 from tests.fulltest.frame_source import build_frame_source  # noqa: E402
@@ -205,10 +207,21 @@ MIXFORMERV2_CONFIG = MixFormerV2MatcherConfig(
 # BigTrack policy config
 # -----------------------------------------------------------------------------
 
-# Current supported value: "simple".
+# Current supported values: "simple", "score_gated".
 # SimpleBigTrack creates one candidate, accepts the first matcher result, and
 # never updates templates. It is intentionally dumb for first integration tests.
 POLICY_KIND = "simple"
+
+SCORE_GATED_CONFIG = ScoreGatedBigTrackConfig(
+    th_good=0.70,
+    th_bad=0.30,
+    max_center_error=0.35,
+    max_size_error=0.50,
+    predictor_uncertainty_scale=10.0,
+    recovery_after=3,
+    lost_after=10,
+    template_update_interval=5,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -279,6 +292,12 @@ def _build_policy(predictor, matcher):
 
     if POLICY_KIND == "simple":
         return SimpleBigTrack(predictor=predictor, matcher=matcher)
+    if POLICY_KIND == "score_gated":
+        return ScoreGatedBigTrack(
+            predictor=predictor,
+            matcher=matcher,
+            config=SCORE_GATED_CONFIG,
+        )
     raise ValueError(f"Unknown POLICY_KIND: {POLICY_KIND!r}")
 
 

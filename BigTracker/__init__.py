@@ -1,5 +1,5 @@
 from BigTracker.big_track import BigTrack
-from BigTracker.big_trackers import BaseBigTrack, SimpleBigTrack
+from BigTracker.big_trackers import BaseBigTrack, ScoreGatedBigTrack, ScoreGatedBigTrackConfig, SimpleBigTrack
 from BigTracker.matcher import Matcher, MatcherModel
 from BigTracker.matcher_models import (
     FftMatcherConfig,
@@ -69,6 +69,8 @@ __all__ = [
     "Predictor",
     "PredictorModel",
     "SearchCandidate",
+    "ScoreGatedBigTrack",
+    "ScoreGatedBigTrackConfig",
     "SimpleBigTrack",
     "Size",
     "TemplateCandidate",
