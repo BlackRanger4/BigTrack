@@ -207,20 +207,20 @@ Risk:
 
 ### Phase 1: Policy Metrics And Decision Helpers
 
-- [ ] Add shared decision helper module:
+- [x] Add shared decision helper module:
 
 ```text
 BigTracker/big_trackers/_decision.py
 ```
 
-- [ ] Add score normalization helpers:
+- [x] Add score normalization helpers:
   - clamp scores to `[0, 1]`
   - combine evidence into one acceptance score
   - compute reject reason from failed thresholds
-- [ ] Add candidate/match pairing helpers:
+- [x] Add candidate/match pairing helpers:
   - select best match
   - preserve candidate metadata in decision metadata
-- [ ] Add tests for:
+- [x] Add tests for:
   - strong evidence accepted
   - low match score rejected
   - high ambiguity rejected
