@@ -9,6 +9,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from BigTracker import (  # noqa: E402
+    AdaptiveKalmanPredictorConfig,
+    AdaptiveKalmanPredictorModel,
     FftMatcherConfig,
     FftMatcherModel,
     KalmanPredictorConfig,
@@ -47,8 +49,8 @@ FOLDER_FPS = 30.0
 # Predictor config
 # -----------------------------------------------------------------------------
 
-# Current supported value: "kalman".
-PREDICTOR_KIND = "kalman"
+# Current supported values: "kalman", "adaptive_kalman".
+PREDICTOR_KIND = "adaptive_kalman"
 
 # Kalman process noise: higher means prediction follows motion changes faster.
 # Kalman measurement noise: higher means matcher measurements are trusted less.
@@ -61,6 +63,27 @@ KALMAN_CONFIG = KalmanPredictorConfig(
     default_covariance=(10.0, 0.0, 0.0, 10.0),
     min_size=(1.0, 1.0),
     reject_uncertainty_growth=1.5,
+)
+
+ADAPTIVE_KALMAN_CONFIG = AdaptiveKalmanPredictorConfig(
+    process_noise_position=1.0,
+    process_noise_size=0.5,
+    measurement_noise_position=4.0,
+    measurement_noise_size=2.0,
+    default_covariance=(10.0, 0.0, 0.0, 10.0),
+    min_size=(1.0, 1.0),
+    adaptive_measurement_noise=True,
+    min_measurement_noise_scale=0.25,
+    max_measurement_noise_scale=3.0,
+    min_uncertainty=0.0,
+    max_uncertainty=100.0,
+    reject_uncertainty_growth=1.5,
+    reject_covariance_growth=1.15,
+    reject_velocity_damping=0.85,
+    max_position_velocity=80.0,
+    max_size_velocity=20.0,
+    uncertainty_accept_decay=0.90,
+    clamp_to_frame=True,
 )
 
 
@@ -268,6 +291,8 @@ def _build_predictor():
 
     if PREDICTOR_KIND == "kalman":
         return KalmanPredictorModel(KALMAN_CONFIG)
+    if PREDICTOR_KIND == "adaptive_kalman":
+        return AdaptiveKalmanPredictorModel(ADAPTIVE_KALMAN_CONFIG)
     raise ValueError(f"Unknown PREDICTOR_KIND: {PREDICTOR_KIND!r}")
 
 

@@ -47,6 +47,12 @@ Implemented core:
   - constant-velocity Kalman predictor for center and size
   - covariance-backed uncertainty
   - basic reject uncertainty growth
+- `BigTracker/predictor_models/adaptive_kalman.py`
+  - upgraded constant-velocity Kalman predictor
+  - score-adaptive measurement noise
+  - uncertainty clamp/decay controls
+  - reject velocity damping and covariance growth
+  - optional velocity and frame-boundary clamps
 - `BigTracker/state.py`
   - already has `TrackerMode`, `BigTrackCounters`, `BigTrackDecision`, `SearchCandidate`, and `MatchEvidence`
 
@@ -295,20 +301,30 @@ Weak score near predictor keeps tracking alive but never updates templates.
 
 ### Phase 3: Kalman Predictor Upgrade
 
-- [ ] Extend `KalmanPredictorConfig`:
+- [x] Add upgraded predictor in a separate file:
+
+```text
+BigTracker/predictor_models/adaptive_kalman.py
+```
+
+- [x] Add `AdaptiveKalmanPredictorConfig`:
   - adaptive measurement noise toggle
   - min/max uncertainty
   - reject velocity damping
   - max position velocity
   - max size velocity
   - uncertainty decay on accept
-- [ ] Use accepted match score to tune measurement noise.
-- [ ] Clamp unreasonable velocity and size velocity.
-- [ ] Improve `update_from_reject(...)`:
+- [x] Use accepted match score to tune measurement noise.
+- [x] Clamp unreasonable velocity and size velocity.
+- [x] Improve `update_from_reject(...)`:
   - grow uncertainty
   - damp velocity after repeated rejects
   - preserve predicted position instead of freezing old position when appropriate
-- [ ] Add tests for:
+- [x] Export `AdaptiveKalmanPredictorConfig` and `AdaptiveKalmanPredictorModel`.
+- [x] Add `tests/fulltest/main.py` selector support:
+  - `PREDICTOR_KIND = "kalman"`
+  - `PREDICTOR_KIND = "adaptive_kalman"`
+- [x] Add tests for:
   - adaptive measurement noise
   - reject uncertainty growth
   - velocity damping
@@ -316,8 +332,8 @@ Weak score near predictor keeps tracking alive but never updates templates.
 
 Acceptance:
 
-- Existing Kalman behavior remains compatible by default.
-- New behavior is opt-in or conservatively configured.
+- Existing `KalmanPredictorModel` remains untouched.
+- New behavior is selected explicitly through `AdaptiveKalmanPredictorModel`.
 
 ### Phase 4: Multi-Candidate Search
 
@@ -438,7 +454,7 @@ Required cases:
 
 ```python
 POLICY_KIND = "score_gated"
-PREDICTOR_KIND = "kalman"
+PREDICTOR_KIND = "adaptive_kalman"  # or "kalman"
 MATCHER_KIND = "mixformerv2"
 ```
 

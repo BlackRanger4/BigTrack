@@ -19,7 +19,12 @@ from BigTracker.matcher_models import (
     OSTrackTemplate,
 )
 from BigTracker.predictor import Predictor, PredictorModel
-from BigTracker.predictor_models import KalmanPredictorConfig, KalmanPredictorModel
+from BigTracker.predictor_models import (
+    AdaptiveKalmanPredictorConfig,
+    AdaptiveKalmanPredictorModel,
+    KalmanPredictorConfig,
+    KalmanPredictorModel,
+)
 from BigTracker.state import (
     BigTrackCounters,
     BigTrackDecision,
@@ -39,6 +44,8 @@ __all__ = [
     "BigTrackCounters",
     "BigTrackDecision",
     "BigTrackState",
+    "AdaptiveKalmanPredictorConfig",
+    "AdaptiveKalmanPredictorModel",
     "BaseBigTrack",
     "Box",
     "FftMatcherConfig",
