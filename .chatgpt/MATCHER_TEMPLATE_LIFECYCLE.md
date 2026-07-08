@@ -24,7 +24,19 @@ Template lifecycle is driven by `BaseBigTrack.update()`:
 
 So a matcher never updates its own template history during `match()`. `match()` only reads `MatcherState` and returns evidence.
 
-Current `SimpleBigTrack` always sets `allow_template_update=False`, so it initializes templates but does not refresh them. The future BigTrack policy phase must turn template updates on under controlled score/quality rules.
+`SimpleBigTrack` always sets `allow_template_update=False`, so it initializes templates but does not refresh them.
+
+`ScoreGatedBigTrack` turns template updates on only when the accepted visual result is strong enough:
+
+```text
+allow_template_update =
+    accepted visual match
+    and match_score >= th_good
+    and template_update_interval elapsed
+    and not clipped unless template_allow_clipped=True
+```
+
+Weak matches can keep tracking alive when they agree with the predictor, but they never update templates.
 
 ## Shared MatcherState Shape
 
@@ -305,17 +317,18 @@ MixFormerV2:
 - Always passes both fixed initial template and online adaptive template.
 - Our `init_template` and `adaptive_template` map directly to those two model inputs.
 
-## What Future BigTrack Policy Must Add
+## Current BigTrack Template Update Policy
 
-The wrappers are ready for template updates, but current `SimpleBigTrack` disables them. The next BigTrack policy should decide when `allow_template_update=True`, using signals such as:
+The wrappers are ready for template updates. The active production policy is `ScoreGatedBigTrack`.
 
-- `match_score` above a safe threshold
-- low `ambiguity_score`
-- strong `localization_score`
-- acceptable `scale_score`
-- not clipped, or clipped only under controlled conditions
-- enough frame gap since last template update
-- current tracker mode is stable tracking, not recovery
+`ScoreGatedBigTrack` decides `allow_template_update=True` only when:
+
+- the visual evidence is accepted
+- `match_score >= th_good`
+- the configured `template_update_interval` has elapsed
+- the result is not clipped, unless `template_allow_clipped=True`
+
+It does not use separate template-specific ambiguity, scale, or occlusion thresholds. Those signals remain available in `MatchEvidence` for future policies, but they are not part of the current template update rule.
 
 That policy should be implemented in BigTrack, not inside the matcher wrappers. The matcher wrappers should continue to only build, store, select, and apply model-specific template payloads.
 
@@ -692,8 +705,11 @@ update(frame)
             |
             |--> accept, allow_template_update=False:
             |       |--> update motion/output state only
+            |       |--> example: weak match near predictor
             |
             |--> accept, allow_template_update=True:
+                    |--> requires match_score >= th_good
+                    |--> requires template_update_interval elapsed
                     |
                     |--> extract_template(approved box)
                     |--> update_templates(...)

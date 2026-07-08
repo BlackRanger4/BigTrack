@@ -35,6 +35,14 @@ Implemented core:
   - accepts the first match blindly
   - never enters uncertain/recovery/lost
   - never updates templates
+- `BigTracker/big_trackers/score_gated.py`
+  - creates one predicted candidate
+  - accepts strong matcher evidence immediately
+  - accepts weak matcher evidence only when it agrees with predictor geometry
+  - emits predictor boxes for uncertain/occluded/recovery states
+  - enters recovery after repeated rejected visual decisions
+  - emits lost after repeated failed recovery cycles
+  - updates templates only on good matcher scores at a configured interval
 - `BigTracker/predictor_models/kalman.py`
   - constant-velocity Kalman predictor for center and size
   - covariance-backed uncertainty
@@ -42,9 +50,11 @@ Implemented core:
 - `BigTracker/state.py`
   - already has `TrackerMode`, `BigTrackCounters`, `BigTrackDecision`, `SearchCandidate`, and `MatchEvidence`
 
-Main gap:
+Main gap after Phase 2:
 
-- The matcher layer is now strong, but the policy layer still behaves like a smoke test.
+- The first real policy exists, but candidate generation is still one-candidate only.
+- Recovery mode currently keeps the same search candidate; wider/multiple recovery search is a later phase.
+- The Kalman predictor is still basic and can be improved with adaptive uncertainty/velocity behavior.
 
 ## Design Goals
 
@@ -86,10 +96,13 @@ BigTracker/big_trackers/score_gated.py
 
 Behavior:
 
-- Accept match when scores pass configured thresholds.
-- Mark `UNCERTAIN` when evidence is weak but usable.
-- Reject evidence when identity/scale/ambiguity is bad.
-- Allow template update only on clean, high-confidence accepted frames.
+- Accept matcher result when `match_score >= th_good`.
+- For `th_bad <= match_score < th_good`, accept matcher only when its box agrees with the predictor box.
+- For weak-but-far matches, output the predictor box and enter `UNCERTAIN`.
+- For `match_score < th_bad`, output the predictor box and enter `OCCLUDED`.
+- Enter `RECOVERY` after `recovery_after` consecutive rejected visual decisions.
+- Enter `LOST` after `lost_after` failed recovery cycles.
+- Allow template update only when `match_score >= th_good`, the update interval has elapsed, and the box is not clipped unless configured.
 
 Why first:
 
@@ -97,13 +110,15 @@ Why first:
 - Makes template bank logic actually run.
 - Works with all four real matchers.
 
-#### Option B: Recovery Policy
+#### Option B: Recovery Search Policy
 
-Extend score-gated behavior with recovery modes.
+Extend score-gated behavior with better recovery search.
 
 Behavior:
 
-- After repeated weak/rejected frames, enter `UNCERTAIN`, then `OCCLUDED` or `RECOVERY`.
+- After repeated rejected visual decisions, enter `RECOVERY`.
+- A weak match near predictor is accepted for continuity and does not count as rejected.
+- A weak match far from predictor is rejected and can contribute to recovery.
 - Generate wider search candidates.
 - Emit `LOST` after configured recovery budget expires.
 - Recover to `TRACKING` only on strong evidence.
@@ -240,11 +255,9 @@ Acceptance:
 - [x] Implement accept/uncertain/reject decisions.
 - [x] Enable template updates only when:
   - accepted
-  - score above template threshold
-  - ambiguity below threshold
-  - scale score above threshold
-  - not clipped
-  - mode is stable enough
+  - `match_score >= th_good`
+  - `template_update_interval` has elapsed
+  - not clipped unless `template_allow_clipped=True`
 - [x] Update exports from `BigTracker/big_trackers/__init__.py` and `BigTracker/__init__.py`.
 - [x] Add fake matcher tests proving template updates happen only after clean accepts.
 - [x] Add `tests/fulltest/main.py` selector support:
@@ -256,6 +269,29 @@ Acceptance:
 - `SimpleBigTrack` still passes existing matcher integration tests.
 - `ScoreGatedBigTrack` passes mode/decision/template-update tests.
 - Fulltest can switch policies without code edits.
+
+Implemented `ScoreGatedBigTrackConfig` fields:
+
+```text
+th_good
+th_bad
+max_center_error
+max_size_error
+predictor_uncertainty_scale
+recovery_after
+lost_after
+template_update_interval
+template_allow_clipped
+```
+
+Rejected visual decisions are:
+
+- no matcher result
+- weak score far from predictor
+- bad score
+- non-good score while already in recovery/lost
+
+Weak score near predictor keeps tracking alive but never updates templates.
 
 ### Phase 3: Kalman Predictor Upgrade
 
@@ -307,13 +343,13 @@ Acceptance:
 - Heavy matchers are not called more than configured candidate budget.
 - Candidate metadata explains why each candidate exists.
 
-### Phase 5: Lifecycle Recovery
+### Phase 5: Recovery Search Expansion
 
-- [ ] Extend `ScoreGatedBigTrack` or create `RecoveryBigTrack`.
-- [ ] Implement mode transitions:
+- [ ] Extend `ScoreGatedBigTrack` recovery candidate behavior.
+- [x] Implement basic mode transitions:
   - `TRACKING -> UNCERTAIN`
-  - `UNCERTAIN -> OCCLUDED`
-  - `OCCLUDED -> RECOVERY`
+  - `TRACKING -> OCCLUDED`
+  - `UNCERTAIN/OCCLUDED -> RECOVERY`
   - `RECOVERY -> TRACKING`
   - `RECOVERY -> LOST`
 - [ ] Define output behavior per mode:
@@ -329,15 +365,13 @@ Acceptance:
 - Lost/recovery behavior is deterministic and configured.
 - Public `TrackingOutput.status` matches internal lifecycle mode.
 
-### Phase 6: Template Update Policy
+### Phase 6: Template Update Policy Refinement
 
 - [ ] Add explicit template update config:
-  - min score
-  - max ambiguity
-  - min scale score
-  - cooldown frames
+  - update interval/cooldown frames
+  - optional clipped-box behavior
   - no update in recovery/lost
-  - no update when clipped
+  - future optional policy hooks only if needed
 - [ ] Add optional update quality score passed into `TemplateCandidate.metadata`.
 - [ ] Add tests with fake matcher proving:
   - `init_template` never changes
@@ -348,6 +382,16 @@ Acceptance:
 Acceptance:
 
 - Online/adaptive templates become policy-controlled across all four matchers.
+
+Current Phase 2 rule is intentionally simple:
+
+```text
+allow_template_update =
+    accepted visual match
+    and match_score >= th_good
+    and template_update_interval elapsed
+    and not clipped unless template_allow_clipped=True
+```
 
 ### Phase 7: Optional Predictor Models
 
@@ -378,18 +422,19 @@ Use fake predictor and fake matcher objects first. Real tracker/model tests shou
 Required cases:
 
 - clean match accepted
-- weak match enters `UNCERTAIN`
+- weak-near match accepted without template update
+- weak-far match enters `UNCERTAIN`
 - repeated reject enters `RECOVERY`
 - recovery success returns to `TRACKING`
 - recovery timeout enters `LOST`
-- template update happens only on clean accepted frames
+- template update happens only on good accepted frames after interval
 - matcher errors do not corrupt previous stable state
 - candidate budgets are respected
 - predictor uncertainty changes search behavior
 
 ## Fulltest Additions
 
-Update `tests/fulltest/main.py` after `ScoreGatedBigTrack` exists:
+`tests/fulltest/main.py` can switch policy, predictor, and matcher:
 
 ```python
 POLICY_KIND = "score_gated"

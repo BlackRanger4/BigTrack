@@ -374,6 +374,15 @@ BigTracker/big_trackers/simple.py
     accepts matcher output without score thresholds
     does not update templates
     does not handle recovery, lost state, occlusion, or distractors
+
+BigTracker/big_trackers/score_gated.py
+  class ScoreGatedBigTrack(BaseBigTrack)
+    one candidate at predicted target position
+    accepts good matcher scores directly
+    accepts weak matcher scores only when geometry agrees with predictor
+    outputs predictor box on rejected visual evidence
+    enters uncertain/occluded/recovery/lost modes by counters
+    updates templates only on good matcher scores at a configured interval
 ```
 
 ```text
@@ -419,9 +428,54 @@ BigTrack:
   ) -> BigTrackState
 ```
 
-`make_candidates(...)`, `decide(...)`, and `apply_decision(...)` are the policy hooks. `BaseBigTrack` owns the shared update flow, but these methods stay abstract until a real tracker policy is designed.
+`make_candidates(...)`, `decide(...)`, and `apply_decision(...)` are the policy hooks. `BaseBigTrack` owns the shared update flow, while concrete policies such as `SimpleBigTrack` and `ScoreGatedBigTrack` implement those hooks.
 
-`SimpleBigTrack` is the first concrete tracker policy. It exists for integration testing and simple demos, not as the final robust policy.
+`SimpleBigTrack` exists for integration testing and simple demos. `ScoreGatedBigTrack` is the first real production policy.
+
+### ScoreGatedBigTrack Policy
+
+`ScoreGatedBigTrack` uses matcher score first, then predictor agreement for weak evidence:
+
+```text
+match_score >= th_good
+  -> accept matcher box
+  -> TRACKING
+  -> may update template if interval elapsed
+
+th_bad <= match_score < th_good
+  and matcher box near predictor box
+  -> accept matcher box
+  -> no template update
+
+th_bad <= match_score < th_good
+  and matcher box far from predictor box
+  -> reject matcher box
+  -> output predictor box
+  -> UNCERTAIN
+
+match_score < th_bad
+  -> reject matcher box
+  -> output predictor box
+  -> OCCLUDED
+
+repeated rejected visual decisions
+  -> RECOVERY
+
+repeated failed recovery cycles
+  -> LOST
+```
+
+Template update rule:
+
+```text
+allow_template_update =
+    accepted visual match
+    and match_score >= th_good
+    and template_update_interval elapsed
+    and not clipped unless template_allow_clipped=True
+```
+
+Weak matches can keep motion state alive, but they never update matcher templates.
 
 ### Initialize Flow
 
