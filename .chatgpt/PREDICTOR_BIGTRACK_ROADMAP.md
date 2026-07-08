@@ -53,6 +53,18 @@ Implemented core:
   - uncertainty clamp/decay controls
   - reject velocity damping and covariance growth
   - optional velocity and frame-boundary clamps
+- `BigTracker/predictor_models/alpha_beta.py`
+  - lightweight alpha-beta predictor
+  - score-weighted accept correction
+  - max velocity/acceleration and frame clamps
+- `BigTracker/predictor_models/history.py`
+  - bounded accepted-box history predictor
+  - smoothed velocity from recent accepted boxes
+  - max velocity/acceleration and frame clamps
+- `BigTracker/predictor_models/kalman_accel.py`
+  - constant-acceleration Kalman predictor
+  - acceleration stored in prediction metadata
+  - max velocity/acceleration and frame clamps
 - `BigTracker/state.py`
   - already has `TrackerMode`, `BigTrackCounters`, `BigTrackDecision`, `SearchCandidate`, and `MatchEvidence`
 
@@ -61,7 +73,7 @@ Main gap after Phase 3:
 - The first real policy exists, but candidate generation is still one-candidate only.
 - Recovery mode currently keeps the same search candidate; wider/multiple recovery search is a later phase.
 - Baseline template update gating exists, but future policy can make it more mode-aware and easier to inspect.
-- `AdaptiveKalmanPredictorModel` exists; optional predictor models can now be added cleanly for comparison.
+- Phase 4 optional predictor models exist; comparing and tuning them is a separate evaluation step.
 
 ## Design Goals
 
@@ -338,16 +350,25 @@ Acceptance:
 
 ### Phase 4: Optional Predictor Models
 
-- [ ] Add `Alpha-BetaPredictor`
-- [ ] Add `HistoryPredictorModel`.
-- [ ] Add `ConstantAccelerationKalmanPredictorModel` only if history/Kalman tests show a real gap.
-- [ ] Add `tests/fulltest/main.py` selector support for every completed predictor.
+- [x] Add `AlphaBetaPredictorModel`.
+- [x] Add `HistoryPredictorModel`.
+- [x] Add `ConstantAccelerationKalmanPredictorModel`.
+- [x] Add frame-size clamping for completed predictors.
+- [x] Add max velocity and max acceleration controls for target position and size.
+- [x] Add `tests/fulltest/main.py` selector support for every completed predictor:
+  - `PREDICTOR_KIND = "kalman"`
+  - `PREDICTOR_KIND = "adaptive_kalman"`
+  - `PREDICTOR_KIND = "alpha_beta"`
+  - `PREDICTOR_KIND = "history"`
+  - `PREDICTOR_KIND = "constant_accel_kalman"`
+- [x] Add focused tests proving the predictors share the same contract and clamp motion.
 
 Acceptance:
 
 - Predictor models share the same `PredictorModel` contract.
 - Fulltest can select predictor by config.
-- Fake trajectory tests make predictor tradeoffs visible before they affect BigTrack policy.
+- Basic fake trajectory tests exist.
+- Predictor comparison/tuning is user-owned.
 
 ### Phase 5: Multi-Candidate Search
 
@@ -468,7 +489,7 @@ Required cases:
 
 ```python
 POLICY_KIND = "score_gated"
-PREDICTOR_KIND = "adaptive_kalman"  # or "kalman"
+PREDICTOR_KIND = "adaptive_kalman"  # or "kalman", "alpha_beta", "history", "constant_accel_kalman"
 MATCHER_KIND = "mixformerv2"
 ```
 

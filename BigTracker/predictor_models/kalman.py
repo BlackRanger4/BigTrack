@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from BigTracker.predictor import PredictorModel
+from BigTracker.predictor_models._motion import (
+    clamp_center_size,
+    frame_shape_from_frame,
+    frame_shape_from_metadata,
+    put_frame_shape,
+)
 from BigTracker.state import BigTrackState, TrackerPredictionState
 from BigTracker.types import FrameLike, Point, Size, TrackerMode
 
@@ -22,6 +28,7 @@ class KalmanPredictorConfig:
     default_covariance: Covariance2x2 = (10.0, 0.0, 0.0, 10.0)
     min_size: Size = (1.0, 1.0)
     reject_uncertainty_growth: float = 1.5
+    clamp_to_frame: bool = True
 
 
 class KalmanPredictorModel(PredictorModel):
@@ -66,15 +73,18 @@ class KalmanPredictorModel(PredictorModel):
             self.config.process_noise_size,
         )
 
-        size = (
-            max(self.config.min_size[0], w),
-            max(self.config.min_size[1], h),
+        target_pos, target_size = clamp_center_size(
+            (x, y),
+            (w, h),
+            frame_shape=frame_shape_from_frame(frame),
+            min_size=self.config.min_size,
+            clamp_to_frame=self.config.clamp_to_frame,
         )
         metadata = self._metadata(prediction.metadata, cov_x, cov_y, cov_w, cov_h, frame)
 
         return TrackerPredictionState(
-            target_pos=(x, y),
-            target_size=size,
+            target_pos=target_pos,
+            target_size=target_size,
             target_velocity=(vx, vy),
             target_size_velocity=(vw, vh),
             last_score=prediction.last_score,
@@ -150,13 +160,17 @@ class KalmanPredictorModel(PredictorModel):
             self.config.measurement_noise_size,
         )
 
+        target_pos, target_size = clamp_center_size(
+            (x, y),
+            (w, h),
+            frame_shape=frame_shape_from_metadata(prediction.metadata, "kalman_frame_shape"),
+            min_size=self.config.min_size,
+            clamp_to_frame=self.config.clamp_to_frame,
+        )
         metadata = self._metadata(prediction.metadata, cov_x, cov_y, cov_w, cov_h)
         return TrackerPredictionState(
-            target_pos=(x, y),
-            target_size=(
-                max(self.config.min_size[0], w),
-                max(self.config.min_size[1], h),
-            ),
+            target_pos=target_pos,
+            target_size=target_size,
             target_velocity=(vx, vy),
             target_size_velocity=(vw, vh),
             last_score=max(0.0, min(1.0, score)),
@@ -271,6 +285,7 @@ class KalmanPredictorModel(PredictorModel):
         if frame is not None:
             updated["kalman_last_frame_idx"] = frame.idx
             updated["kalman_last_timestamp"] = frame.timestamp
+            put_frame_shape(updated, "kalman_frame_shape", frame)
         return updated
 
     def _uncertainty_from_covariances(

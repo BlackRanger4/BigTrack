@@ -11,8 +11,14 @@ if str(REPO_ROOT) not in sys.path:
 from BigTracker import (  # noqa: E402
     AdaptiveKalmanPredictorConfig,
     AdaptiveKalmanPredictorModel,
+    AlphaBetaPredictorConfig,
+    AlphaBetaPredictorModel,
+    ConstantAccelerationKalmanPredictorConfig,
+    ConstantAccelerationKalmanPredictorModel,
     FftMatcherConfig,
     FftMatcherModel,
+    HistoryPredictorConfig,
+    HistoryPredictorModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
     LiteTrackMatcherConfig,
@@ -49,7 +55,8 @@ FOLDER_FPS = 30.0
 # Predictor config
 # -----------------------------------------------------------------------------
 
-# Current supported values: "kalman", "adaptive_kalman".
+# Current supported values:
+# "kalman", "adaptive_kalman", "alpha_beta", "history", "constant_accel_kalman".
 PREDICTOR_KIND = "adaptive_kalman"
 
 # Kalman process noise: higher means prediction follows motion changes faster.
@@ -63,6 +70,7 @@ KALMAN_CONFIG = KalmanPredictorConfig(
     default_covariance=(10.0, 0.0, 0.0, 10.0),
     min_size=(1.0, 1.0),
     reject_uncertainty_growth=1.5,
+    clamp_to_frame=True,
 )
 
 ADAPTIVE_KALMAN_CONFIG = AdaptiveKalmanPredictorConfig(
@@ -82,6 +90,61 @@ ADAPTIVE_KALMAN_CONFIG = AdaptiveKalmanPredictorConfig(
     reject_velocity_damping=0.85,
     max_position_velocity=80.0,
     max_size_velocity=20.0,
+    uncertainty_accept_decay=0.90,
+    clamp_to_frame=True,
+)
+
+ALPHA_BETA_CONFIG = AlphaBetaPredictorConfig(
+    alpha_position=0.85,
+    beta_position=0.20,
+    alpha_size=0.80,
+    beta_size=0.15,
+    min_size=(1.0, 1.0),
+    max_position_velocity=80.0,
+    max_size_velocity=20.0,
+    max_position_acceleration=30.0,
+    max_size_acceleration=10.0,
+    reject_velocity_damping=0.85,
+    reject_uncertainty_growth=1.0,
+    accept_uncertainty_decay=0.85,
+    clamp_to_frame=True,
+)
+
+HISTORY_CONFIG = HistoryPredictorConfig(
+    history_length=8,
+    velocity_window=4,
+    velocity_smoothing=0.60,
+    size_velocity_smoothing=0.60,
+    min_size=(1.0, 1.0),
+    max_position_velocity=80.0,
+    max_size_velocity=20.0,
+    max_position_acceleration=30.0,
+    max_size_acceleration=10.0,
+    reject_velocity_damping=0.85,
+    reject_uncertainty_growth=1.0,
+    accept_uncertainty_decay=0.90,
+    clamp_to_frame=True,
+)
+
+CONSTANT_ACCEL_KALMAN_CONFIG = ConstantAccelerationKalmanPredictorConfig(
+    process_noise_position=1.0,
+    process_noise_size=0.5,
+    process_noise_velocity=0.5,
+    process_noise_size_velocity=0.25,
+    process_noise_acceleration=0.25,
+    process_noise_size_acceleration=0.10,
+    measurement_noise_position=4.0,
+    measurement_noise_size=2.0,
+    min_size=(1.0, 1.0),
+    adaptive_measurement_noise=True,
+    max_position_velocity=80.0,
+    max_size_velocity=20.0,
+    max_position_acceleration=30.0,
+    max_size_acceleration=10.0,
+    reject_velocity_damping=0.85,
+    reject_acceleration_damping=0.65,
+    reject_uncertainty_growth=1.5,
+    reject_covariance_growth=1.15,
     uncertainty_accept_decay=0.90,
     clamp_to_frame=True,
 )
@@ -293,6 +356,12 @@ def _build_predictor():
         return KalmanPredictorModel(KALMAN_CONFIG)
     if PREDICTOR_KIND == "adaptive_kalman":
         return AdaptiveKalmanPredictorModel(ADAPTIVE_KALMAN_CONFIG)
+    if PREDICTOR_KIND == "alpha_beta":
+        return AlphaBetaPredictorModel(ALPHA_BETA_CONFIG)
+    if PREDICTOR_KIND == "history":
+        return HistoryPredictorModel(HISTORY_CONFIG)
+    if PREDICTOR_KIND == "constant_accel_kalman":
+        return ConstantAccelerationKalmanPredictorModel(CONSTANT_ACCEL_KALMAN_CONFIG)
     raise ValueError(f"Unknown PREDICTOR_KIND: {PREDICTOR_KIND!r}")
 
 
