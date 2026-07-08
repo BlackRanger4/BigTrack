@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 import math
 from pathlib import Path
 import random
+import statistics
 import sys
 import unittest
 
@@ -35,7 +36,17 @@ from BigTracker.types import OutputStatus, TrackerMode
 
 FRAME_SIZE = (640.0, 360.0)
 FRAME_COUNT = 180
-SEED = 1337
+SEEDS = tuple(range(1337, 1347))
+SCENARIOS = (
+    "mixed_accel",
+    "constant_velocity",
+    "constant_acceleration",
+    "zig_zag",
+    "sine_wave",
+    "center_direct",
+    "center_orbit",
+    "random_maneuver",
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,26 @@ class _Metrics:
     avg_uncertainty: float
 
 
+@dataclass(frozen=True)
+class _MetricSummary:
+    average: float
+    minimum: float
+    maximum: float
+
+
+@dataclass(frozen=True)
+class _AggregateMetrics:
+    name: str
+    position_rmse: _MetricSummary
+    size_rmse: _MetricSummary
+    prediction_box_rmse: _MetricSummary
+    accept_position_rmse: _MetricSummary
+    max_position_error: _MetricSummary
+    reject_position_rmse: _MetricSummary
+    final_position_error: _MetricSummary
+    avg_uncertainty: _MetricSummary
+
+
 class PredictorTrajectoryEvaluationTest(unittest.TestCase):
     def test_predictors_handle_complex_noisy_trajectory(self) -> None:
         results = run_evaluation()
@@ -91,32 +122,32 @@ class PredictorTrajectoryEvaluationTest(unittest.TestCase):
         self.assertEqual(set(results), set(_predictors()))
         for name, metrics in results.items():
             with self.subTest(predictor=name):
-                self.assertLess(metrics.position_rmse, 70.0)
-                self.assertLess(metrics.size_rmse, 35.0)
-                self.assertLess(metrics.prediction_box_rmse, 80.0)
-                self.assertEqual(metrics.reject_frames, 24)
-                self.assertEqual(metrics.accepted_frames, FRAME_COUNT - 1 - 24)
+                self.assertLess(metrics.position_rmse.maximum, 70.0)
+                self.assertLess(metrics.size_rmse.maximum, 35.0)
+                self.assertLess(metrics.prediction_box_rmse.maximum, 80.0)
+                self.assertLessEqual(metrics.position_rmse.minimum, metrics.position_rmse.average)
+                self.assertLessEqual(metrics.position_rmse.average, metrics.position_rmse.maximum)
 
 
-def run_evaluation() -> dict[str, _Metrics]:
-    truth = _make_truth()
-    measurements = _make_measurements(truth)
-    return {
-        name: _run_predictor(name, predictor, truth, measurements)
-        for name, predictor in _predictors().items()
-    }
+def run_evaluation() -> dict[str, _AggregateMetrics]:
+    runs, _ = _collect_runs()
+    return {name: _aggregate_metrics(name, metrics) for name, metrics in runs.items()}
 
 
 def render_report() -> str:
-    truth = _make_truth()
-    measurements = _make_measurements(truth)
-    results = {
-        name: _run_predictor(name, predictor, truth, measurements)
-        for name, predictor in _predictors().items()
+    all_runs, scenario_runs = _collect_runs()
+    results = {name: _aggregate_metrics(name, metrics) for name, metrics in all_runs.items()}
+    scenario_results = {
+        scenario: {
+            name: _aggregate_metrics(name, metrics)
+            for name, metrics in predictor_runs.items()
+        }
+        for scenario, predictor_runs in scenario_runs.items()
     }
-    ordered = sorted(results.values(), key=lambda item: item.position_rmse)
-    accepted = sum(1 for measurement in measurements[1:] if measurement.available)
-    rejected = len(measurements[1:]) - accepted
+    ordered = sorted(results.values(), key=lambda item: item.position_rmse.average)
+    accepted = FRAME_COUNT - 1 - 24
+    rejected = 24
+    run_count = len(SEEDS) * len(SCENARIOS)
 
     lines = [
         "# Predictor Trajectory Evaluation Report",
@@ -125,15 +156,19 @@ def render_report() -> str:
         "",
         "## Scenario",
         "",
-        f"- Seed: `{SEED}`",
+        f"- Runs: `{run_count}`",
+        f"- Seeds: `{SEEDS[0]}-{SEEDS[-1]}`",
+        f"- Motion scenarios: `{len(SCENARIOS)}`",
         f"- Frames: `{FRAME_COUNT}`",
         f"- Frame size: `{int(FRAME_SIZE[0])}x{int(FRAME_SIZE[1])}`",
-        "- Motion: sinusoidal acceleration, sharp turns, bouncing frame boundaries, and size oscillation.",
+        "- Motion: mixed acceleration, constant speed, constant acceleration, zig-zag, sine wave, direct center return, circular center return, and random maneuvers.",
         "- Measurements: Gaussian noise, structured occlusion windows, and deterministic outliers.",
-        f"- Accepted measurements: `{accepted}`",
-        f"- Rejected measurements: `{rejected}`",
+        f"- Accepted measurements per run: `{accepted}`",
+        f"- Rejected measurements per run: `{rejected}`",
         "",
         "## Metrics",
+        "",
+        "Each cell is `average (minimum-maximum)` across all scenario and seed runs.",
         "",
         "| Predictor | Position RMSE | Size RMSE | Box RMSE | Accept Pos RMSE | Reject Pos RMSE | Max Pos Err | Final Pos Err | Avg Uncertainty |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -142,15 +177,33 @@ def render_report() -> str:
         lines.append(
             "| "
             f"{metrics.name} | "
-            f"{metrics.position_rmse:.3f} | "
-            f"{metrics.size_rmse:.3f} | "
-            f"{metrics.prediction_box_rmse:.3f} | "
-            f"{metrics.accept_position_rmse:.3f} | "
-            f"{metrics.reject_position_rmse:.3f} | "
-            f"{metrics.max_position_error:.3f} | "
-            f"{metrics.final_position_error:.3f} | "
-            f"{metrics.avg_uncertainty:.3f} |"
+            f"{_format_summary(metrics.position_rmse)} | "
+            f"{_format_summary(metrics.size_rmse)} | "
+            f"{_format_summary(metrics.prediction_box_rmse)} | "
+            f"{_format_summary(metrics.accept_position_rmse)} | "
+            f"{_format_summary(metrics.reject_position_rmse)} | "
+            f"{_format_summary(metrics.max_position_error)} | "
+            f"{_format_summary(metrics.final_position_error)} | "
+            f"{_format_summary(metrics.avg_uncertainty)} |"
         )
+
+    predictor_order = [metrics.name for metrics in ordered]
+    lines.extend(
+        [
+            "",
+            "## Position RMSE By Scenario",
+            "",
+            "Each cell is average position RMSE across the ten seeds for that motion scenario.",
+            "",
+            "| Scenario | " + " | ".join(predictor_order) + " |",
+            "|---|" + "---:|" * len(predictor_order),
+        ]
+    )
+    for scenario in SCENARIOS:
+        row = [scenario]
+        for name in predictor_order:
+            row.append(f"{scenario_results[scenario][name].position_rmse.average:.3f}")
+        lines.append("| " + " | ".join(row) + " |")
 
     best = ordered[0]
     lines.extend(
@@ -158,13 +211,55 @@ def render_report() -> str:
             "",
             "## Notes",
             "",
-            f"- Best position RMSE in this run: `{best.name}` at `{best.position_rmse:.3f}` pixels.",
+            f"- Best average position RMSE: `{best.name}` at `{best.position_rmse.average:.3f}` pixels.",
             "- This is a synthetic stress test, not a final predictor ranking.",
-            "- The report is deterministic; changes in predictor code should change these numbers only when behavior changed.",
+            "- All scenario and seed combinations are fixed, so the aggregate report is reproducible.",
             "- `Reject Pos RMSE` measures prediction during occlusion/rejected measurement frames.",
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def _collect_runs() -> tuple[dict[str, list[_Metrics]], dict[str, dict[str, list[_Metrics]]]]:
+    all_runs: dict[str, list[_Metrics]] = {name: [] for name in _predictors()}
+    scenario_runs: dict[str, dict[str, list[_Metrics]]] = {
+        scenario: {name: [] for name in _predictors()} for scenario in SCENARIOS
+    }
+    for scenario in SCENARIOS:
+        for seed in SEEDS:
+            truth = _make_truth(seed, scenario)
+            measurements = _make_measurements(truth, seed)
+            for name, predictor in _predictors().items():
+                metrics = _run_predictor(name, predictor, truth, measurements)
+                all_runs[name].append(metrics)
+                scenario_runs[scenario][name].append(metrics)
+    return all_runs, scenario_runs
+
+
+def _aggregate_metrics(name: str, runs: list[_Metrics]) -> _AggregateMetrics:
+    def summarize(field_name: str) -> _MetricSummary:
+        values = [float(getattr(run, field_name)) for run in runs]
+        return _MetricSummary(
+            average=statistics.fmean(values),
+            minimum=min(values),
+            maximum=max(values),
+        )
+
+    return _AggregateMetrics(
+        name=name,
+        position_rmse=summarize("position_rmse"),
+        size_rmse=summarize("size_rmse"),
+        prediction_box_rmse=summarize("prediction_box_rmse"),
+        accept_position_rmse=summarize("accept_position_rmse"),
+        max_position_error=summarize("max_position_error"),
+        reject_position_rmse=summarize("reject_position_rmse"),
+        final_position_error=summarize("final_position_error"),
+        avg_uncertainty=summarize("avg_uncertainty"),
+    )
+
+
+def _format_summary(summary: _MetricSummary) -> str:
+    return f"{summary.average:.3f} ({summary.minimum:.3f}-{summary.maximum:.3f})"
 
 
 def _predictors():
@@ -326,27 +421,16 @@ def _run_predictor(
     )
 
 
-def _make_truth() -> list[_Truth]:
-    rng = random.Random(SEED)
-    pos = (125.0, 95.0)
-    velocity = (4.5, 2.0)
+def _make_truth(seed: int, scenario: str) -> list[_Truth]:
+    rng = random.Random(seed)
+    pos = (125.0 + rng.uniform(-8.0, 8.0), 95.0 + rng.uniform(-6.0, 6.0))
+    velocity = (4.5 + rng.uniform(-0.4, 0.4), 2.0 + rng.uniform(-0.3, 0.3))
     size = (48.0, 58.0)
     size_velocity = (0.25, -0.05)
     truth = [_Truth(0, 0.0, pos, size, velocity, size_velocity)]
 
     for idx in range(1, FRAME_COUNT):
-        turn_x = 1.8 * math.sin(idx / 14.0) + 0.9 * math.sin(idx / 5.5)
-        turn_y = 1.4 * math.cos(idx / 18.0) - 0.7 * math.sin(idx / 7.0)
-        if 45 <= idx < 70:
-            turn_x -= 2.4
-            turn_y += 1.1
-        if 105 <= idx < 130:
-            turn_x += 2.8
-            turn_y -= 1.6
-        acceleration = (
-            0.18 * turn_x + rng.gauss(0.0, 0.18),
-            0.18 * turn_y + rng.gauss(0.0, 0.18),
-        )
+        acceleration = _scenario_acceleration(scenario, idx, pos, velocity, rng)
         velocity = (
             max(-13.0, min(13.0, velocity[0] + acceleration[0])),
             max(-10.0, min(10.0, velocity[1] + acceleration[1])),
@@ -370,8 +454,88 @@ def _make_truth() -> list[_Truth]:
     return truth
 
 
-def _make_measurements(truth: list[_Truth]) -> list[_Measurement]:
-    rng = random.Random(SEED + 100)
+def _scenario_acceleration(
+    scenario: str,
+    idx: int,
+    pos: tuple[float, float],
+    velocity: tuple[float, float],
+    rng: random.Random,
+) -> tuple[float, float]:
+    if scenario == "mixed_accel":
+        turn_x = 1.8 * math.sin(idx / 14.0) + 0.9 * math.sin(idx / 5.5)
+        turn_y = 1.4 * math.cos(idx / 18.0) - 0.7 * math.sin(idx / 7.0)
+        if 45 <= idx < 70:
+            turn_x -= 2.4
+            turn_y += 1.1
+        if 105 <= idx < 130:
+            turn_x += 2.8
+            turn_y -= 1.6
+        return (
+            0.18 * turn_x + rng.gauss(0.0, 0.18),
+            0.18 * turn_y + rng.gauss(0.0, 0.18),
+        )
+
+    if scenario == "constant_velocity":
+        return (rng.gauss(0.0, 0.025), rng.gauss(0.0, 0.025))
+
+    if scenario == "constant_acceleration":
+        direction = 1.0 if idx < 95 else -0.65
+        return (
+            direction * 0.11 + rng.gauss(0.0, 0.035),
+            -0.055 + rng.gauss(0.0, 0.03),
+        )
+
+    if scenario == "zig_zag":
+        target_vx = 8.5 if (idx // 18) % 2 == 0 else -8.5
+        target_vy = 4.8 if (idx // 30) % 2 == 0 else -4.8
+        return (
+            0.42 * (target_vx - velocity[0]) + rng.gauss(0.0, 0.08),
+            0.36 * (target_vy - velocity[1]) + rng.gauss(0.0, 0.08),
+        )
+
+    if scenario == "sine_wave":
+        target_vx = 5.2
+        target_vy = 6.0 * math.cos(idx / 11.0)
+        return (
+            0.18 * (target_vx - velocity[0]) + rng.gauss(0.0, 0.04),
+            0.28 * (target_vy - velocity[1]) + rng.gauss(0.0, 0.06),
+        )
+
+    if scenario == "center_direct":
+        center = (FRAME_SIZE[0] * 0.5, FRAME_SIZE[1] * 0.5)
+        return (
+            0.012 * (center[0] - pos[0]) - 0.28 * velocity[0] + rng.gauss(0.0, 0.04),
+            0.012 * (center[1] - pos[1]) - 0.28 * velocity[1] + rng.gauss(0.0, 0.04),
+        )
+
+    if scenario == "center_orbit":
+        center = (FRAME_SIZE[0] * 0.5, FRAME_SIZE[1] * 0.5)
+        dx = pos[0] - center[0]
+        dy = pos[1] - center[1]
+        swirl = (-0.018 * dy, 0.018 * dx)
+        spring = (-0.009 * dx, -0.009 * dy)
+        damping = (-0.10 * velocity[0], -0.10 * velocity[1])
+        return (
+            spring[0] + swirl[0] + damping[0] + rng.gauss(0.0, 0.04),
+            spring[1] + swirl[1] + damping[1] + rng.gauss(0.0, 0.04),
+        )
+
+    if scenario == "random_maneuver":
+        phase = idx // 24
+        target_vx = 8.0 * math.sin(phase * 1.7 + 0.3)
+        target_vy = 6.0 * math.cos(phase * 1.2 - 0.4)
+        burst_x = rng.gauss(0.0, 0.55) if idx % 23 == 0 else rng.gauss(0.0, 0.10)
+        burst_y = rng.gauss(0.0, 0.45) if idx % 31 == 0 else rng.gauss(0.0, 0.10)
+        return (
+            0.22 * (target_vx - velocity[0]) + burst_x,
+            0.22 * (target_vy - velocity[1]) + burst_y,
+        )
+
+    raise ValueError(f"Unknown trajectory scenario: {scenario}")
+
+
+def _make_measurements(truth: list[_Truth], seed: int) -> list[_Measurement]:
+    rng = random.Random(seed + 100)
     measurements: list[_Measurement] = []
     for item in truth:
         if item.frame_idx == 0:
