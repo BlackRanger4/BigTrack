@@ -362,12 +362,22 @@ Acceptance:
   - `PREDICTOR_KIND = "history"`
   - `PREDICTOR_KIND = "constant_accel_kalman"`
 - [x] Add focused tests proving the predictors share the same contract and clamp motion.
+- [x] Add deterministic complex trajectory evaluation:
+  - noisy center and size measurements
+  - random acceleration disturbances
+  - sharp turns and frame-boundary bounces
+  - outliers and structured occlusion windows
+- [x] Add evaluation report:
+
+```text
+.chatgpt/PREDICTOR_TRAJECTORY_REPORT.md
+```
 
 Acceptance:
 
 - Predictor models share the same `PredictorModel` contract.
 - Fulltest can select predictor by config.
-- Basic fake trajectory tests exist.
+- Complex deterministic trajectory tests exist.
 - Predictor comparison/tuning is user-owned.
 
 ### Phase 5: Multi-Candidate Search
