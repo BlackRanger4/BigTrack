@@ -56,11 +56,12 @@ Implemented core:
 - `BigTracker/state.py`
   - already has `TrackerMode`, `BigTrackCounters`, `BigTrackDecision`, `SearchCandidate`, and `MatchEvidence`
 
-Main gap after Phase 2:
+Main gap after Phase 3:
 
 - The first real policy exists, but candidate generation is still one-candidate only.
 - Recovery mode currently keeps the same search candidate; wider/multiple recovery search is a later phase.
-- The Kalman predictor is still basic and can be improved with adaptive uncertainty/velocity behavior.
+- Baseline template update gating exists, but future policy can make it more mode-aware and easier to inspect.
+- `AdaptiveKalmanPredictorModel` exists; optional predictor models can now be added cleanly for comparison.
 
 ## Design Goals
 
@@ -335,14 +336,27 @@ Acceptance:
 - Existing `KalmanPredictorModel` remains untouched.
 - New behavior is selected explicitly through `AdaptiveKalmanPredictorModel`.
 
-### Phase 4: Multi-Candidate Search
+### Phase 4: Optional Predictor Models
+
+- [ ] Add `Alpha-BetaPredictor`
+- [ ] Add `HistoryPredictorModel`.
+- [ ] Add `ConstantAccelerationKalmanPredictorModel` only if history/Kalman tests show a real gap.
+- [ ] Add `tests/fulltest/main.py` selector support for every completed predictor.
+
+Acceptance:
+
+- Predictor models share the same `PredictorModel` contract.
+- Fulltest can select predictor by config.
+- Fake trajectory tests make predictor tradeoffs visible before they affect BigTrack policy.
+
+### Phase 5: Multi-Candidate Search
 
 - [ ] Add `CandidateGenerationConfig`.
 - [ ] Add candidate modes:
   - predicted center
   - last output center
   - velocity-damped center
-  - local grid
+  - local grid around prediction
   - scale variants
 - [ ] Use mode-specific budgets:
   - `TRACKING`: cheap, 1-3 candidates
@@ -358,46 +372,58 @@ Acceptance:
 
 - Heavy matchers are not called more than configured candidate budget.
 - Candidate metadata explains why each candidate exists.
+- Predictor uncertainty changes candidate radius or candidate budget.
 
-### Phase 5: Recovery Search Expansion
+### Phase 6: Better BigTrack Policy
 
-- [ ] Extend `ScoreGatedBigTrack` recovery candidate behavior.
-- [x] Implement basic mode transitions:
+This phase should be a new BigTrack policy class, not matcher code. `ScoreGatedBigTrack`
+is the stable one-candidate policy. The next policy can build on it with recovery
+search, richer output behavior, and cleaner diagnostics.
+
+- [x] Baseline template update policy already exists in `ScoreGatedBigTrack`:
+  - update interval/cooldown frames
+  - optional clipped-box behavior through `template_allow_clipped`
+  - no update on weak/rejected/recovery/lost decisions
+  - template score comes from accepted tracking confidence
+- [x] Basic mode transitions already exist in `ScoreGatedBigTrack`:
   - `TRACKING -> UNCERTAIN`
   - `TRACKING -> OCCLUDED`
   - `UNCERTAIN/OCCLUDED -> RECOVERY`
   - `RECOVERY -> TRACKING`
   - `RECOVERY -> LOST`
+- [ ] Create a better BigTrack policy class, for example:
+
+```text
+BigTracker/big_trackers/recovery_gated.py
+```
+
+- [ ] Extend recovery candidate behavior:
+  - larger search area in `RECOVERY`
+  - multiple recovery candidates if Phase 5 exists
+  - strong evidence required to leave `RECOVERY`
 - [ ] Define output behavior per mode:
   - `ACTIVE`: accepted visual box
-  - `UNCERTAIN`: accepted but weak box or predicted box with low confidence
-  - `OCCLUDED`: no confident visual box; optional predicted box
+  - `UNCERTAIN`: weak accepted box or predicted box with low confidence
+  - `OCCLUDED`: predictor box or no box depending config
+  - `RECOVERY`: predictor/recovery candidate output depending config
   - `LOST`: no box or last known box depending config
-- [ ] Add recovery candidates with increasing search radius.
-- [ ] Add tests for all transitions and counters.
+- [ ] Improve debug metadata:
+  - selected candidate id
+  - decision reason
+  - match score and predictor score
+  - counters and template update flag
+- [ ] Add tests proving:
+  - recovery search uses a larger area or more candidates
+  - weak matches do not update templates
+  - good recovery returns to `TRACKING`
+  - recovery timeout enters `LOST`
+  - public `TrackingOutput.status` matches internal lifecycle mode
 
 Acceptance:
 
-- Lost/recovery behavior is deterministic and configured.
-- Public `TrackingOutput.status` matches internal lifecycle mode.
-
-### Phase 6: Template Update Policy Refinement
-
-- [ ] Add explicit template update config:
-  - update interval/cooldown frames
-  - optional clipped-box behavior
-  - no update in recovery/lost
-  - future optional policy hooks only if needed
-- [ ] Add optional update quality score passed into `TemplateCandidate.metadata`.
-- [ ] Add tests with fake matcher proving:
-  - `init_template` never changes
-  - `adaptive_template` changes only after approved clean frames
-  - `best_templates` remains bounded
-  - cooldown is respected
-
-Acceptance:
-
-- Online/adaptive templates become policy-controlled across all four matchers.
+- `ScoreGatedBigTrack` remains simple and stable.
+- The new BigTrack policy owns recovery expansion and lifecycle decisions.
+- Online/adaptive templates remain policy-controlled across all four matchers.
 
 Current Phase 2 rule is intentionally simple:
 
@@ -408,18 +434,6 @@ allow_template_update =
     and template_update_interval elapsed
     and not clipped unless template_allow_clipped=True
 ```
-
-### Phase 7: Optional Predictor Models
-
-- [ ] Add `HistoryPredictorModel`.
-- [ ] Compare it against Kalman in fake trajectory tests.
-- [ ] Add `ConstantAccelerationKalmanPredictorModel` only if history/Kalman tests show a real gap.
-- [ ] Add optical-flow predictor last, behind optional OpenCV dependency and clear fallback.
-
-Acceptance:
-
-- Predictor models share the same `PredictorModel` contract.
-- Fulltest can select predictor by config.
 
 ## Test Plan
 
