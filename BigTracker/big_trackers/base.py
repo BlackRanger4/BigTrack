@@ -9,6 +9,7 @@ from BigTracker.predictor import Predictor
 from BigTracker.state import (
     BigTrackCounters,
     BigTrackState,
+    TemplateCandidate,
     TrackerPredictionState,
     TrackingOutput,
 )
@@ -109,6 +110,7 @@ class BaseBigTrack(BigTrack):
                 target_size=decision.accepted_target_size,
                 previous_state=next_state.matcher,
             )
+            template = _score_template_candidate(template, decision.confidence)
             matcher_state = self.matcher.update_templates(next_state.matcher, template)
             next_state = replace(next_state, matcher=matcher_state)
 
@@ -147,4 +149,13 @@ def _box_to_center_size(box: Box) -> tuple[Point, Size]:
     return (
         (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0),
         (float(width), float(height)),
+    )
+
+
+def _score_template_candidate(template: TemplateCandidate, tracking_score: float) -> TemplateCandidate:
+    """Attach accepted tracking confidence to the approved template candidate."""
+
+    return replace(
+        template,
+        quality_score=max(0.0, min(1.0, float(tracking_score))),
     )

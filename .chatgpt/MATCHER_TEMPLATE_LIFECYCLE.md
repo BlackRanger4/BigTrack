@@ -42,27 +42,41 @@ MatcherState(
 The meaning is the same for all four trackers:
 
 - `init_template`: fixed identity anchor from the first ROI. It is never replaced by `update_templates()`.
-- `best_templates`: bounded bank of latest approved templates. The current wrappers append approved templates and keep only the last `max_best_templates`.
-- `adaptive_template`: newest approved online template. At initialization it points to `init_template`; after approved updates it points to the newest template candidate.
+- `best_templates`: bounded queue of latest approved templates. The wrappers append approved templates and keep only the last `max_best_templates`.
+- `adaptive_template`: highest-scored approved template still inside the bounded queue. At initialization it points to `init_template`; after approved updates it points to the best template in `best_templates`.
 
 ## Shared Update Rule
 
 All four wrappers implement the same `update_templates(...)` logic:
 
-1. Append `template.template` to `state.best_templates`.
-2. Read `config.max_best_templates`.
-3. If `max_best_templates == 0`, clear the bank.
-4. If the bank is too long, keep only the newest templates.
-5. Return a replaced `MatcherState` with:
+1. Score the approved `TemplateCandidate`.
+2. Store that score on the tracker-specific template as `template_score`.
+3. Append the scored template to `state.best_templates`.
+4. Read `config.max_best_templates`.
+5. If `max_best_templates == 0`, clear the bank.
+6. If the bank is too long, keep only the newest templates.
+7. Pick `adaptive_template` as the highest-scored template still inside the bounded bank.
+8. If the previous best template falls out of the bounded window, recompute the best from the remaining templates.
+9. If the bank is empty, fall back to `init_template`.
+10. Return a replaced `MatcherState` with:
    - unchanged `init_template`
    - updated `best_templates`
-   - `adaptive_template=template.template`
+   - updated `adaptive_template`
+
+The template score comes from the BigTrack-approved tracking confidence:
+
+```text
+quality_score = decision.confidence
+template_score = decision.confidence * identity_score
+```
+
+In the current update flow, `BaseBigTrack` stamps `decision.confidence` onto the extracted `TemplateCandidate` before calling `matcher.update_templates(...)`. For policies that set `decision.confidence` from the accepted `MatchEvidence.match_score`, the template bank is therefore ranked by tracking score. `identity_score` remains available as a multiplier when a future policy adds a separate identity check.
 
 That gives us the three-template-history structure we wanted:
 
 - initialization template
 - latest-good template bank
-- active online/adaptive template
+- active online/adaptive template selected by best score in the current window
 
 ## NanoTrack
 
@@ -114,7 +128,7 @@ NanoTrack is special because the source model keeps an active template feature i
 
 `extract_template(...)` only runs when BigTrack asks. It builds a new `NanoTrackTemplate` from the accepted target position/size.
 
-`update_templates(...)` preserves `init_template`, appends the approved template to `best_templates`, and makes it the new `adaptive_template`.
+`update_templates(...)` preserves `init_template`, appends the approved template to `best_templates`, and makes the best-scored template in the current window the new `adaptive_template`.
 
 ## OSTrack
 
@@ -163,7 +177,7 @@ The OSTrack network/config/checkpoint are loaded once in `__init__`.
 
 ### Approved Extraction And Update
 
-`extract_template(...)` builds a fresh `OSTrackTemplate` for the accepted box. `update_templates(...)` then makes that template the active adaptive template and appends it to the bounded latest-good bank.
+`extract_template(...)` builds a fresh `OSTrackTemplate` for the accepted box. `update_templates(...)` appends it to the bounded latest-good bank and selects the best-scored template in that bank as the active adaptive template.
 
 ## LiteTrack
 
@@ -212,7 +226,7 @@ LiteTrack differs from OSTrack because the template is encoded once into `templa
 
 ### Approved Extraction And Update
 
-Approved extraction builds and encodes a new LiteTrack template immediately. The update step preserves the fixed initial template, appends the approved encoded template to `best_templates`, and makes it the new adaptive template.
+Approved extraction builds and encodes a new LiteTrack template immediately. The update step preserves the fixed initial template, appends the approved encoded template to `best_templates`, and selects the best-scored template in that window as the adaptive template.
 
 ## MixFormerV2
 
@@ -266,7 +280,7 @@ This is the clearest place where our own template structure maps to the original
 
 ### Approved Extraction And Update
 
-Approved extraction builds a new `MixFormerV2Template`. The update step does not touch `init_template`; it only updates the latest-good bank and replaces `adaptive_template`.
+Approved extraction builds a new `MixFormerV2Template`. The update step does not touch `init_template`; it only updates the latest-good bank and selects the best-scored template still inside that bank as `adaptive_template`.
 
 ## Important Differences Between The Four
 
@@ -683,6 +697,9 @@ update(frame)
                     |
                     |--> extract_template(approved box)
                     |--> update_templates(...)
+                          |
+                          |--> append to bounded queue
+                          |--> choose best-scored template in queue as adaptive
 ```
 
 ### NanoTrack
@@ -720,8 +737,8 @@ approved box
     |
     |--> crop new exemplar
     |--> encode new zf
-    |--> replace adaptive_template
     |--> append to best_templates
+    |--> adaptive_template = best score in current window
 
 Storage type: feature tensor/state
 Feature averaging later: possible if shapes/backend semantics match
@@ -762,8 +779,8 @@ approved box
     |--> crop new template image
     |--> normalize
     |--> forward_z(...)
-    |--> replace adaptive_template
     |--> append to best_templates
+    |--> adaptive_template = best score in current window
 
 Storage type: feature tensor
 Feature averaging later: possible
@@ -805,8 +822,8 @@ approved box
     |--> crop new template image
     |--> normalize image tensor
     |--> build new box_mask_z
-    |--> replace adaptive_template
     |--> append to best_templates
+    |--> adaptive_template = best score in current window
 
 Storage type: normalized image-crop tensor
 Feature averaging later: not available unless backend exposes cached features
@@ -858,8 +875,8 @@ approved box
     |
     |--> crop new template image
     |--> normalize image tensor
-    |--> replace adaptive_template
     |--> append to best_templates
+    |--> adaptive_template = best score in current window
 
 Storage type: normalized image-crop tensor
 Feature averaging later: not available unless backend exposes cached features

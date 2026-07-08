@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 from BigTracker.matcher import MatcherModel
 from BigTracker.matcher_models._boxes import center_size_to_box
 from BigTracker.matcher_models._crop import nanotrack_subwindow
+from BigTracker.matcher_models._templates import update_template_bank
 from BigTracker.matcher_models._torch import inference_context, move_to_device, resolve_device
 from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
 from BigTracker.types import Box, FrameLike, Point, Size, TrackerMode
@@ -72,6 +73,7 @@ class NanoTrackTemplate:
     crop_box: Box
     crop_resize_factor: float
     was_clipped: bool
+    template_score: float
     metadata: Mapping[str, Any]
 
 
@@ -147,20 +149,9 @@ class NanoTrackMatcherModel(MatcherModel):
         state: MatcherState,
         template: TemplateCandidate,
     ) -> MatcherState:
-        """Insert an approved template into the latest-good bank."""
+        """Insert an approved template and select the best one in the window."""
 
-        best_templates = tuple(state.best_templates) + (template.template,)
-        max_templates = max(0, int(self.config.max_best_templates))
-        if max_templates == 0:
-            best_templates = ()
-        elif len(best_templates) > max_templates:
-            best_templates = best_templates[-max_templates:]
-
-        return replace(
-            state,
-            best_templates=best_templates,
-            adaptive_template=template.template,
-        )
+        return update_template_bank(state, template, self.config.max_best_templates)
 
     def match(
         self,
@@ -242,6 +233,7 @@ class NanoTrackMatcherModel(MatcherModel):
             crop_box=crop.crop_box,
             crop_resize_factor=crop.resize_factor,
             was_clipped=crop.is_clipped,
+            template_score=1.0,
             metadata={
                 "matcher": "nanotrack",
                 "exemplar_size": self.config.exemplar_size,
