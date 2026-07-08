@@ -210,11 +210,11 @@ MIXFORMERV2_CONFIG = MixFormerV2MatcherConfig(
 # Current supported values: "simple", "score_gated".
 # SimpleBigTrack creates one candidate, accepts the first matcher result, and
 # never updates templates. It is intentionally dumb for first integration tests.
-POLICY_KIND = "simple"
+POLICY_KIND = "score_gated"
 
 SCORE_GATED_CONFIG = ScoreGatedBigTrackConfig(
-    th_good=0.70,
-    th_bad=0.30,
+    th_good=0.90,
+    th_bad=0.75,
     max_center_error=0.35,
     max_size_error=0.50,
     predictor_uncertainty_scale=10.0,
