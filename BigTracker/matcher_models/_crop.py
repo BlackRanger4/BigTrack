@@ -72,7 +72,7 @@ def nanotrack_subwindow(
     center: Point,
     model_size: int,
     original_size: float,
-    channel_average: Any,
+    pad_value: Any,
 ) -> CropResult:
     """Extract a NanoTrack/Siamese square subwindow as NCHW float tensor input."""
 
@@ -84,7 +84,7 @@ def nanotrack_subwindow(
         center=center,
         size=(float(original_size_int), float(original_size_int)),
         output_size=int(model_size),
-        pad_value=channel_average,
+        pad_value=pad_value,
     )
     patch = np.asarray(crop.image).transpose(2, 0, 1)
     patch = patch[np.newaxis, :, :, :].astype(np.float32, copy=False)
@@ -188,4 +188,3 @@ def _require_cv2() -> Any:
     except ImportError as error:
         raise RuntimeError("matcher crop resizing requires opencv-python") from error
     return cv2
-

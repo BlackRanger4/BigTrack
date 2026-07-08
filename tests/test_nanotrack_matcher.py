@@ -32,6 +32,7 @@ class _FakeNanoTrackBackend:
         self.track_count = 0
         self.zf = None
         self.active_features = []
+        self.template_inputs = []
 
     def eval(self):
         self.eval_count += 1
@@ -39,6 +40,7 @@ class _FakeNanoTrackBackend:
 
     def template(self, z):
         self.template_count += 1
+        self.template_inputs.append(z)
         self.zf = {"feature_id": self.template_count, "shape": tuple(z.shape)}
         return None
 
@@ -150,6 +152,23 @@ class NanoTrackMatcherTest(unittest.TestCase):
         self.assertIsInstance(state.init_template, NanoTrackTemplate)
         self.assertEqual(state.best_templates, ())
         self.assertIs(state.adaptive_template, state.init_template)
+        self.assertEqual(state.init_template.pad_value, 0)
+
+    def test_template_padding_does_not_use_full_frame_average(self) -> None:
+        np = _require_numpy()
+        image = np.full((80, 90, 3), 100, dtype=np.uint8)
+        frame = _Frame(image=image, idx=0, timestamp=0.0)
+        backend = _FakeNanoTrackBackend()
+        matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
+
+        matcher.initialize_template(
+            frame,
+            target_pos=(2.0, 2.0),
+            target_size=(20.0, 20.0),
+        )
+
+        template_input = backend.template_inputs[0]
+        self.assertEqual(float(template_input.min()), 0.0)
 
     def test_match_uses_candidate_and_returns_evidence(self) -> None:
         backend = _FakeNanoTrackBackend()

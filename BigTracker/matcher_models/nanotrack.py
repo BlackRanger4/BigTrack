@@ -65,7 +65,7 @@ class NanoTrackTemplate:
     """Template object owned by NanoTrackMatcherModel."""
 
     feature_state: Any
-    channel_average: Any
+    pad_value: Any
     target_size: Size
     source_frame_idx: int
     source_box: Box
@@ -178,7 +178,7 @@ class NanoTrackMatcherModel(MatcherModel):
             frame=frame,
             search_center=candidate.search_center,
             predicted_target_size=candidate.predicted_target_size,
-            channel_average=template.channel_average,
+            pad_value=template.pad_value,
         )
         outputs = self._track_backend(search_crop.image)
         score = self._convert_score(outputs["cls"])
@@ -223,21 +223,19 @@ class NanoTrackMatcherModel(MatcherModel):
     ) -> NanoTrackTemplate:
         """Crop and encode one NanoTrack template."""
 
-        np = _require_numpy()
-        image = np.asarray(frame.image)
-        channel_average = np.mean(image, axis=(0, 1))
+        pad_value = 0
         crop_size = self._template_crop_size(target_size)
         crop = nanotrack_subwindow(
-            image=image,
+            image=frame.image,
             center=target_pos,
             model_size=self.config.exemplar_size,
             original_size=crop_size,
-            channel_average=channel_average,
+            pad_value=pad_value,
         )
         feature_state = self._encode_template(crop.image)
         return NanoTrackTemplate(
             feature_state=feature_state,
-            channel_average=channel_average,
+            pad_value=pad_value,
             target_size=(float(target_size[0]), float(target_size[1])),
             source_frame_idx=frame.idx,
             source_box=center_size_to_box(target_pos, target_size),
@@ -302,7 +300,7 @@ class NanoTrackMatcherModel(MatcherModel):
         frame: FrameLike,
         search_center: Point,
         predicted_target_size: Size,
-        channel_average: Any,
+        pad_value: Any,
     ) -> tuple[Any, float]:
         """Build NanoTrack search crop and return crop plus template scale."""
 
@@ -317,7 +315,7 @@ class NanoTrackMatcherModel(MatcherModel):
             center=search_center,
             model_size=self.config.instance_size,
             original_size=round(s_x),
-            channel_average=channel_average,
+            pad_value=pad_value,
         )
         return crop, scale_z
 
