@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bigtracker"
+version = "0.1.0"
+description = "Composable object tracking utilities, matchers, and predictors."
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+torch = [
+    "torch",
+]
+dev = [
+    "build",
+    "pytest",
+    "twine",
+]
+
+[tool.setuptools.packages.find]
+include = ["BigTracker*"]
+exclude = ["tests*", "ignores*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
