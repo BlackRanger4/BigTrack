@@ -73,6 +73,15 @@ class BaseBigTrack(BigTrack):
         self._output = output
         return self._state
 
+    def initialize_from_state(self, state: BigTrackState) -> BigTrackState:
+        """Restore prediction, matcher templates, mode, counters, and output."""
+
+        if not isinstance(state, BigTrackState):
+            raise TypeError("initialize_from_state requires a BigTrackState")
+        self._state = state
+        self._output = state.output
+        return state
+
     def update(self, frame: FrameLike) -> TrackingOutput:
         """Process one frame through prediction, matching, decision, and state update."""
 

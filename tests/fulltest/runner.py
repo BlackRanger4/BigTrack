@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Deque, Optional, Tuple
 
 from BigTracker.big_track import BigTrack
-from BigTracker.state import TrackingOutput
+from BigTracker.state import BigTrackState, TrackingOutput
 from BigTracker.types import Box
 
 from tests.fulltest.frame_source import Frame, FrameSource
@@ -121,6 +121,7 @@ class FullTestRunner:
         self.continuous = config.continuous
         self.current_frame: Optional[Frame] = None
         self.latest_output: Optional[TrackingOutput] = None
+        self.saved_state: Optional[BigTrackState] = None
         self.frame_step_requested = False
         self.quit_requested = False
 
@@ -192,10 +193,19 @@ class FullTestRunner:
         elif key == ord("i"):
             self._initialize_tracker_from_roi()
         elif key == ord("r"):
+            state = self.tracker.get_state()
+            if state is not None:
+                self.saved_state = state
+                print(
+                    "Tracker state saved before reset: "
+                    f"frame={state.output.frame_idx} mode={state.mode.value}"
+                )
             self.tracker.reset()
             self.latest_output = None
             self.timing.reset_frame_clock(clear_samples=True)
             print("Tracker reset.")
+        elif key == ord("b"):
+            self._initialize_tracker_from_saved_state()
         elif key in (ord("+"), ord("=")):
             self._keyboard_zoom(1.25)
         elif key in (ord("-"), ord("_")):
@@ -229,6 +239,23 @@ class FullTestRunner:
         print(f"Tracker initialized: box={_fmt_box(box)}")
         self._print_state(self.current_frame, force=True)
 
+    def _initialize_tracker_from_saved_state(self) -> None:
+        """Restore BigTrack from the latest state captured by reset."""
+
+        if self.saved_state is None:
+            print("Cannot restore: no saved tracker state. Press 'r' after initialization first.")
+            return
+
+        state = self.tracker.initialize_from_state(self.saved_state)
+        self.latest_output = self.tracker.get_output()
+        self.timing.reset_frame_clock(clear_samples=True)
+        print(
+            "Tracker restored from saved state: "
+            f"frame={state.output.frame_idx} mode={state.mode.value}"
+        )
+        if self.current_frame is not None:
+            self._print_state(self.current_frame, force=True)
+
     def _render_frame(self, frame: Frame, draw_overlay: bool = True):
         """Render image, tracker box, and timing overlay for the OpenCV window."""
 
@@ -249,6 +276,7 @@ class FullTestRunner:
                 paused=self.paused,
                 continuous=self.continuous,
                 tracker_initialized=self.tracker.get_state() is not None,
+                saved_state_available=self.saved_state is not None,
                 draw_key_help=self.config.draw_key_help,
             )
         return display
@@ -304,7 +332,8 @@ class FullTestRunner:
         print("  c: toggle continuous playback")
         print("  n: next frame")
         print("  i: initialize tracker from drawn ROI")
-        print("  r: reset tracker")
+        print("  r: save current state and reset tracker")
+        print("  b: restore saved tracker state")
         print("  mouse wheel / +/-: zoom")
         print("  0: reset zoom")
         print("  q or esc: quit")
@@ -363,6 +392,7 @@ def _draw_overlay(
     paused: bool,
     continuous: bool,
     tracker_initialized: bool,
+    saved_state_available: bool,
     draw_key_help: bool,
 ) -> None:
     """Draw timing, status, and key help on the fixed display window."""
@@ -371,14 +401,15 @@ def _draw_overlay(
     status = "PAUSED" if paused else "RUNNING"
     mode = "CONT" if continuous else "STEP"
     init = "INIT" if tracker_initialized else "NO INIT"
+    saved = "SAVED" if saved_state_available else "NO SAVE"
     lines = [
-        f"{timing_text}   {status} {mode} {init}",
+        f"{timing_text}   {status} {mode} {init} {saved}",
     ]
     if draw_key_help:
         lines.extend(
             [
                 "space pause/resume | c continuous | n next frame | i init ROI",
-                "r reset tracker | mouse wheel/+/- zoom | 0 reset zoom | q/esc quit",
+                "r save+reset | b restore saved | mouse wheel/+/- zoom | 0 reset zoom | q/esc quit",
             ]
         )
 

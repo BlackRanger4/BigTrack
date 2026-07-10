@@ -40,6 +40,11 @@ class BigTrack(ABC):
         ...
 
     @abstractmethod
+    def initialize_from_state(self, state: BigTrackState) -> BigTrackState:
+        """Initialize this tracker from a previously captured internal state."""
+        ...
+
+    @abstractmethod
     def update(self, frame: FrameLike) -> TrackingOutput:
         """Process one frame through prediction, matching, decision, and state update."""
         ...
