@@ -21,7 +21,7 @@ bigtracker @ file:///E:/GIT/nnn/BigTrack
 For Git-based reuse after pushing tags:
 
 ```text
-bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.1.0
+bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0
 ```
 
 The base package depends on:
