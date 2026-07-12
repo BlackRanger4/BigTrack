@@ -2,26 +2,28 @@
 
 BigTracker is a Python library for single-object tracking experiments. It separates motion prediction, visual matching, and lifecycle policy so matcher models can return evidence while `BigTrack` decides whether to accept, reject, recover, lose, or update templates.
 
-The package is currently prepared for local reuse from other repositories through `pyproject.toml`.
+The package is prepared for reuse from other repositories through `pyproject.toml`.
 
 ## Install
 
-From another local project:
+Install directly from a GitHub tag:
 
 ```powershell
-pip install -e E:\GIT\nnn\BigTrack
+python -m pip install "bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0"
 ```
 
-Or in `requirements.txt`:
-
-```text
-bigtracker @ file:///E:/GIT/nnn/BigTrack
-```
-
-For Git-based reuse after pushing tags:
+Or add the same dependency to `requirements.txt`:
 
 ```text
 bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0
+```
+
+For local development after cloning the repository:
+
+```powershell
+git clone https://github.com/YOUR_USER/BigTrack.git
+cd BigTrack
+python -m pip install -e .
 ```
 
 The base package depends on:
@@ -32,7 +34,7 @@ The base package depends on:
 Torch-backed matcher wrappers import `torch` lazily. Install the optional extra when you need those backends:
 
 ```powershell
-pip install -e E:\GIT\nnn\BigTrack[torch]
+python -m pip install "bigtracker[torch] @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0"
 ```
 
 ## Architecture
@@ -206,7 +208,7 @@ print(output.box, output.status, output.confidence)
 Run the test suite:
 
 ```powershell
-& 'D:\Anaconda\envs\bcpro\python.exe' -m pytest
+python -m pytest
 ```
 
 Current validation after packaging:
@@ -218,7 +220,7 @@ Current validation after packaging:
 Build a wheel for a packaging sanity check:
 
 ```powershell
-& 'D:\Anaconda\envs\bcpro\python.exe' -m pip wheel . --no-deps --no-build-isolation -w .pkg-check
+python -m pip wheel . --no-deps --no-build-isolation -w .pkg-check
 ```
 
 ## Predictor Evaluation
@@ -234,7 +236,7 @@ It compares every predictor across deterministic trajectory families with noise,
 Regenerate the report output:
 
 ```powershell
-& 'D:\Anaconda\envs\bcpro\python.exe' tests\test_predictor_trajectory_evaluation.py
+python tests\test_predictor_trajectory_evaluation.py
 ```
 
 ## Development Notes
