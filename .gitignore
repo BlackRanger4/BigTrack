@@ -1,4 +1,5 @@
 /ignores
+.vscode/
 *.pyc*
 */__pycache__/*
 build/
