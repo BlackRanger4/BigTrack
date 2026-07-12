@@ -6,23 +6,15 @@ The package is prepared for reuse from other repositories through `pyproject.tom
 
 ## Install
 
-Install directly from a GitHub tag:
+From a cloned checkout:
 
 ```powershell
-python -m pip install "bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0"
+python -m pip install .
 ```
 
-Or add the same dependency to `requirements.txt`:
-
-```text
-bigtracker @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0
-```
-
-For local development after cloning the repository:
+For editable local development:
 
 ```powershell
-git clone https://github.com/YOUR_USER/BigTrack.git
-cd BigTrack
 python -m pip install -e .
 ```
 
@@ -34,7 +26,7 @@ The base package depends on:
 Torch-backed matcher wrappers import `torch` lazily. Install the optional extra when you need those backends:
 
 ```powershell
-python -m pip install "bigtracker[torch] @ git+https://github.com/YOUR_USER/BigTrack.git@v0.2.0"
+python -m pip install ".[torch]"
 ```
 
 ## Architecture
