@@ -1,19 +1,31 @@
 from __future__ import annotations
 
-import copy
 import math
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from BigTracker.matcher import MatcherModel
-from BigTracker.matcher_models._boxes import center_size_to_box, clip_box, map_crop_box_back
+from BigTracker.matcher_models._boxes import box_to_center_size, center_size_to_box, clip_box, map_crop_box_back
 from BigTracker.matcher_models._crop import sample_target
 from BigTracker.matcher_models._templates import update_template_bank
 from BigTracker.matcher_models._torch import inference_context, resolve_device
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import Box, FrameLike, Point, Size, TrackerMode
+from BigTracker.thirdparty.ostrack import build_ostrack_network, load_ostrack_config
+from BigTracker.types import (
+    Box,
+    FrameLike,
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchInput,
+    MatcherMatchOutput,
+    MatcherState,
+    MatcherTemplateInput,
+    MatcherTemplateOutput,
+    MatcherUpdateInput,
+    MatcherUpdateOutput,
+    Point,
+    Size,
+)
 
 
 class OSTrackBackend(Protocol):
@@ -49,7 +61,6 @@ BackendFactory = Callable[["OSTrackMatcherConfig"], OSTrackBackend]
 class OSTrackMatcherConfig:
     """Configuration for the OSTrack matcher wrapper."""
 
-    source_root: str = "ignores/Trackers/OSTrack"
     config_path: Optional[str] = None
     checkpoint_path: Optional[str] = None
     device: Optional[str] = None
@@ -100,110 +111,131 @@ class OSTrackMatcherModel(MatcherModel):
             self.backend, self.config = _load_real_ostrack_backend(self.config)
         self.backend.eval()
         self.feat_sz = int(self.config.search_size) // int(self.config.backbone_stride)
+        self._state: Optional[MatcherState] = None
 
-    def initialize_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-    ) -> MatcherState:
+    def initialize_template(self, request: MatcherInitializeInput) -> MatcherInitializeOutput:
         """Create protected initial and adaptive templates for one object."""
 
-        template = self._build_template(frame, target_pos, target_size)
-        return MatcherState(
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(ok=True, metadata={"matcher": "ostrack", "restored": True})
+
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        self._state = MatcherState(
             init_template=template,
             best_templates=(),
             adaptive_template=template,
-            cached_features={"matcher": "ostrack"},
+            metadata={"matcher": "ostrack"},
         )
-
-    def extract_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-        previous_state: MatcherState,
-    ) -> TemplateCandidate:
-        """Build a template candidate from a BigTrack-approved target."""
-
-        template = self._build_template(frame, target_pos, target_size)
-        return TemplateCandidate(
-            template=template,
-            source_frame_idx=frame.idx,
-            source_box=center_size_to_box(target_pos, target_size),
-            quality_score=1.0,
-            identity_score=1.0,
+        return MatcherInitializeOutput(
+            ok=True,
             metadata={
                 "matcher": "ostrack",
-                "previous_best_template_count": len(previous_state.best_templates),
+                "template_source_frame_idx": template.source_frame_idx,
                 "was_clipped": template.was_clipped,
             },
         )
 
-    def update_templates(
-        self,
-        state: MatcherState,
-        template: TemplateCandidate,
-    ) -> MatcherState:
-        """Insert an approved template and select the best one in the window."""
+    def extract_template(self, request: MatcherTemplateInput) -> MatcherTemplateOutput:
+        """Build a template candidate from a BigTrack-approved target."""
 
-        return update_template_bank(state, template, self.config.max_best_templates)
-
-    def match(
-        self,
-        frame: FrameLike,
-        matcher_state: MatcherState,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
-    ) -> MatchEvidence:
-        """Run OSTrack search for one candidate and return evidence only."""
-
-        template = self._select_template(matcher_state)
-        search_crop = self._build_search_crop(
-            frame=frame,
-            search_center=candidate.search_center,
-            predicted_target_size=candidate.predicted_target_size,
-        )
-        search_tensor = _processed_tensors(
-            self.backend.preprocess(search_crop.image, search_crop.attention_mask)
-        )
-
-        with inference_context():
-            outputs = self.backend.forward(template.template_tensor, search_tensor, template.box_mask_z)
-            response = _multiply(self.backend.output_window, outputs["score_map"])
-            pred_boxes = self.backend.cal_bbox(response, outputs["size_map"], outputs["offset_map"])
-
-        pred_box = self._prediction_to_crop_box(pred_boxes, search_crop.resize_factor)
-        mapped_box = map_crop_box_back(
-            pred_box_cxcywh=pred_box,
-            crop_center=candidate.search_center,
-            search_size=float(self.config.search_size),
-            resize_factor=search_crop.resize_factor,
-        )
-        clipped_box = clip_box(mapped_box, frame.image.shape, margin=self.config.clip_margin)
-        stats = self._score_stats(response)
-
-        return MatchEvidence(
-            candidate_id=candidate.candidate_id,
-            box=clipped_box,
-            match_score=stats["best_score"],
-            identity_score=stats["best_score"],
-            appearance_score=stats["best_score"],
-            localization_score=stats["localization_score"],
-            ambiguity_score=stats["ambiguity_score"],
-            scale_score=_scale_score(candidate.predicted_target_size, (clipped_box[2], clipped_box[3])),
-            occlusion_score=max(0.0, min(1.0, 1.0 - stats["best_score"])),
-            is_clipped=search_crop.is_clipped or _box_changed(mapped_box, clipped_box),
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        return MatcherTemplateOutput(
+            template=template,
+            score=1.0,
             metadata={
                 "matcher": "ostrack",
-                "mode": mode.value,
-                "best_idx": stats["best_idx"],
-                "second_score": stats["second_score"],
-                "search_crop_box": search_crop.crop_box,
-                "search_resize_factor": search_crop.resize_factor,
-                "template_source_frame_idx": template.source_frame_idx,
+                "previous_best_template_count": len(self._require_state().best_templates),
+                "source_frame_idx": request.frame.idx,
+                "source_box": template.source_box,
+                "was_clipped": template.was_clipped,
             },
         )
+
+    def update_templates(self, request: MatcherUpdateInput) -> MatcherUpdateOutput:
+        """Insert an approved template and select the best one in the window."""
+
+        self._state = update_template_bank(
+            self._require_state(),
+            request.template,
+            request.score,
+            self.config.max_best_templates,
+        )
+        return MatcherUpdateOutput(ok=True, metadata={"matcher": "ostrack"})
+
+    def match(self, request: MatcherMatchInput) -> MatcherMatchOutput:
+        """Run OSTrack search for each requested target position."""
+
+        matcher_state = self._require_state()
+        template = self._select_template(matcher_state)
+        target_size = template.target_size
+        bboxes: list[Box] = []
+        scores: list[float] = []
+        details: list[dict[str, Any]] = []
+
+        for target_index, target_pos in enumerate(request.target_poses):
+            search_crop = self._build_search_crop(
+                frame=request.frame,
+                search_center=target_pos,
+                predicted_target_size=target_size,
+            )
+            search_tensor = _processed_tensors(
+                self.backend.preprocess(search_crop.image, search_crop.attention_mask)
+            )
+
+            with inference_context():
+                outputs = self.backend.forward(template.template_tensor, search_tensor, template.box_mask_z)
+                response = _multiply(self.backend.output_window, outputs["score_map"])
+                pred_boxes = self.backend.cal_bbox(response, outputs["size_map"], outputs["offset_map"])
+
+            pred_box = self._prediction_to_crop_box(pred_boxes, search_crop.resize_factor)
+            mapped_box = map_crop_box_back(
+                pred_box_cxcywh=pred_box,
+                crop_center=target_pos,
+                search_size=float(self.config.search_size),
+                resize_factor=search_crop.resize_factor,
+            )
+            clipped_box = clip_box(mapped_box, request.frame.image.shape, margin=self.config.clip_margin)
+            stats = self._score_stats(response)
+
+            bboxes.append(clipped_box)
+            scores.append(stats["best_score"])
+            details.append(
+                {
+                    "target_index": target_index,
+                    "best_idx": stats["best_idx"],
+                    "second_score": stats["second_score"],
+                    "localization_score": stats["localization_score"],
+                    "ambiguity_score": stats["ambiguity_score"],
+                    "scale_score": _scale_score(target_size, (clipped_box[2], clipped_box[3])),
+                    "search_crop_box": search_crop.crop_box,
+                    "search_resize_factor": search_crop.resize_factor,
+                    "template_source_frame_idx": template.source_frame_idx,
+                    "is_clipped": search_crop.is_clipped or _box_changed(mapped_box, clipped_box),
+                }
+            )
+
+        return MatcherMatchOutput(
+            bboxes=bboxes,
+            scores=scores,
+            metadata={
+                "matcher": "ostrack",
+                "target_size": target_size,
+                "details": details,
+            },
+        )
+
+    def reset(self) -> None:
+        """Clear matcher runtime state."""
+
+        self._state = None
+
+    def close(self) -> None:
+        """Release matcher runtime state."""
+
+        self.reset()
 
     def _build_template(
         self,
@@ -265,6 +297,13 @@ class OSTrackMatcherModel(MatcherModel):
         if not isinstance(template, OSTrackTemplate):
             raise TypeError("OSTrackMatcherModel requires OSTrackTemplate state")
         return template
+
+    def _require_state(self) -> MatcherState:
+        """Return initialized matcher state."""
+
+        if self._state is None:
+            raise RuntimeError("OSTrackMatcherModel must be initialized before use")
+        return self._state
 
     def _prediction_to_crop_box(self, pred_boxes: Any, resize_factor: float) -> Box:
         """Convert normalized OSTrack predictions to crop-local cx, cy, w, h."""
@@ -374,9 +413,8 @@ class _TorchOSTrackBackend:
 def _load_real_ostrack_backend(
     config: OSTrackMatcherConfig,
 ) -> tuple[OSTrackBackend, OSTrackMatcherConfig]:
-    """Load OSTrack source modules, YAML config, network, and checkpoint."""
+    """Load OSTrack YAML config, network, and checkpoint."""
 
-    source_root = Path(config.source_root)
     config_path = Path(config.config_path) if config.config_path else (
         Path("ignores/Models/Ostrack/config/vitb_384_mae_ce_32x4_ep300.yaml")
     )
@@ -389,35 +427,12 @@ def _load_real_ostrack_backend(
         raise FileNotFoundError(f"OSTrack checkpoint does not exist: {checkpoint_path}")
 
     device = resolve_device(config.device)
-    _prepare_ostrack_source(source_root)
-    from lib.config.ostrack.config import cfg as default_cfg
-    from lib.config.ostrack.config import update_config_from_file
-    from lib.models.ostrack import build_ostrack
-
-    loaded_cfg = copy.deepcopy(default_cfg)
-    update_config_from_file(str(config_path), base_cfg=loaded_cfg)
+    loaded_cfg = load_ostrack_config(config_path)
     effective_config = _config_from_loaded_ostrack_cfg(config, loaded_cfg)
-    network = build_ostrack(loaded_cfg, training=False)
+    network = build_ostrack_network(loaded_cfg, training=False)
     _load_ostrack_checkpoint(network, checkpoint_path)
     network = network.to(device)
     return _TorchOSTrackBackend(network, loaded_cfg, device), effective_config
-
-
-def _prepare_ostrack_source(source_root: Path) -> None:
-    """Expose OSTrack's top-level lib package, failing on package conflicts."""
-
-    source_root_str = str(source_root.resolve())
-    existing_lib = sys.modules.get("lib")
-    if existing_lib is not None:
-        existing_file = getattr(existing_lib, "__file__", "")
-        if existing_file and source_root_str not in str(Path(existing_file).resolve()):
-            raise RuntimeError(
-                "OSTrack uses a top-level 'lib' package, but another 'lib' package is already loaded: "
-                f"{existing_file}"
-            )
-
-    if source_root_str not in sys.path:
-        sys.path.insert(0, source_root_str)
 
 
 def _load_ostrack_checkpoint(network: Any, checkpoint_path: Path) -> None:
@@ -488,13 +503,13 @@ def _square_size_from_count(count: int) -> int:
 
 
 def _load_nested_tensor_class() -> Any:
-    from lib.utils.misc import NestedTensor
+    from BigTracker.thirdparty.ostrack.lib.utils.misc import NestedTensor
 
     return NestedTensor
 
 
 def _load_generate_mask_cond() -> Any:
-    from lib.utils.ce_utils import generate_mask_cond
+    from BigTracker.thirdparty.ostrack.lib.utils.ce_utils import generate_mask_cond
 
     return generate_mask_cond
 
