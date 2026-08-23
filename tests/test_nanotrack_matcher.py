@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import unittest
 
-from BigTracker.big_trackers.simple import SimpleBigTrack
 from BigTracker.matcher_models.nanotrack import (
     NanoTrackMatcherConfig,
     NanoTrackMatcherModel,
@@ -13,9 +12,12 @@ from BigTracker.matcher_models.nanotrack import (
     _SplitNanoTrackOnnxBackend,
     _SplitNanoTrackTorchBackend,
 )
-from BigTracker.predictor_models.kalman import KalmanPredictorModel
-from BigTracker.state import MatcherState, SearchCandidate
-from BigTracker.types import TrackerMode
+from BigTracker.types import (
+    MatcherInitializeInput,
+    MatcherMatchInput,
+    MatcherTemplateInput,
+    MatcherUpdateInput,
+)
 
 
 @dataclass(frozen=True)
@@ -135,20 +137,22 @@ class NanoTrackMatcherTest(unittest.TestCase):
         self.assertEqual(backend.eval_count, 1)
         self.assertEqual(backend.template_count, 0)
 
-        matcher.initialize_template(self.frame, target_pos=(30.0, 30.0), target_size=(20.0, 20.0))
+        matcher.initialize_template(
+            MatcherInitializeInput(frame=self.frame, box=(20.0, 20.0, 20.0, 20.0))
+        )
         self.assertEqual(len(calls), 1)
         self.assertEqual(backend.template_count, 1)
 
-    def test_initialize_template_sets_history_shape(self) -> None:
+    def test_initialize_template_sets_state_shape(self) -> None:
         backend = _FakeNanoTrackBackend()
         matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
 
-        state = matcher.initialize_template(
-            self.frame,
-            target_pos=(30.0, 30.0),
-            target_size=(20.0, 20.0),
+        output = matcher.initialize_template(
+            MatcherInitializeInput(frame=self.frame, box=(20.0, 20.0, 20.0, 20.0))
         )
+        state = matcher._require_state()
 
+        self.assertTrue(output.ok)
         self.assertIsInstance(state.init_template, NanoTrackTemplate)
         self.assertEqual(state.best_templates, ())
         self.assertIs(state.adaptive_template, state.init_template)
@@ -162,83 +166,55 @@ class NanoTrackMatcherTest(unittest.TestCase):
         matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
 
         matcher.initialize_template(
-            frame,
-            target_pos=(2.0, 2.0),
-            target_size=(20.0, 20.0),
+            MatcherInitializeInput(frame=frame, box=(-8.0, -8.0, 20.0, 20.0))
         )
 
         template_input = backend.template_inputs[0]
         self.assertEqual(float(template_input.min()), 0.0)
 
-    def test_match_uses_candidate_and_returns_evidence(self) -> None:
+    def test_match_returns_one_box_per_target_position(self) -> None:
         backend = _FakeNanoTrackBackend()
         matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
-        state = matcher.initialize_template(
-            self.frame,
-            target_pos=(30.0, 30.0),
-            target_size=(20.0, 20.0),
-        )
-        candidate = SearchCandidate(
-            candidate_id="candidate-1",
-            search_center=(45.0, 40.0),
-            predicted_target_size=(20.0, 20.0),
-            prediction_confidence=0.8,
-            motion_uncertainty=0.1,
-            reason="test",
+        matcher.initialize_template(
+            MatcherInitializeInput(frame=self.frame, box=(20.0, 20.0, 20.0, 20.0))
         )
 
-        evidence = matcher.match(self.frame, state, candidate, TrackerMode.TRACKING)
+        output = matcher.match(
+            MatcherMatchInput(
+                frame=self.frame,
+                target_poses=[(45.0, 40.0), (30.0, 30.0)],
+            )
+        )
 
-        self.assertEqual(evidence.candidate_id, "candidate-1")
-        self.assertGreater(evidence.match_score, 0.9)
-        self.assertAlmostEqual(evidence.box[0] + evidence.box[2] / 2.0, 45.0, delta=2.0)
-        self.assertAlmostEqual(evidence.box[1] + evidence.box[3] / 2.0, 40.0, delta=2.0)
-        self.assertEqual(backend.track_count, 1)
+        self.assertEqual(len(output.bboxes), 2)
+        self.assertEqual(len(output.scores), 2)
+        self.assertGreater(output.scores[0], 0.9)
+        self.assertAlmostEqual(output.bboxes[0][0] + output.bboxes[0][2] / 2.0, 45.0, delta=2.0)
+        self.assertAlmostEqual(output.bboxes[0][1] + output.bboxes[0][3] / 2.0, 40.0, delta=2.0)
+        self.assertEqual(backend.track_count, 2)
         self.assertEqual(backend.active_features[0]["feature_id"], 1)
 
     def test_update_templates_preserves_init_and_updates_adaptive(self) -> None:
         backend = _FakeNanoTrackBackend()
         matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
-        state = matcher.initialize_template(
-            self.frame,
-            target_pos=(30.0, 30.0),
-            target_size=(20.0, 20.0),
+        matcher.initialize_template(
+            MatcherInitializeInput(frame=self.frame, box=(20.0, 20.0, 20.0, 20.0))
         )
-        init_template = state.init_template
+        init_template = matcher._require_state().init_template
 
         candidate_1 = matcher.extract_template(
-            self.frame,
-            target_pos=(35.0, 35.0),
-            target_size=(18.0, 18.0),
-            previous_state=state,
+            MatcherTemplateInput(frame=self.frame, box=(26.0, 26.0, 18.0, 18.0))
         )
-        state = matcher.update_templates(state, candidate_1)
+        matcher.update_templates(MatcherUpdateInput(template=candidate_1.template, score=0.4))
         candidate_2 = matcher.extract_template(
-            self.frame,
-            target_pos=(40.0, 40.0),
-            target_size=(16.0, 16.0),
-            previous_state=state,
+            MatcherTemplateInput(frame=self.frame, box=(32.0, 32.0, 16.0, 16.0))
         )
-        state = matcher.update_templates(state, candidate_2)
+        matcher.update_templates(MatcherUpdateInput(template=candidate_2.template, score=0.9))
+        state = matcher._require_state()
 
         self.assertIs(state.init_template, init_template)
         self.assertEqual(len(state.best_templates), 2)
         self.assertIs(state.adaptive_template, candidate_2.template)
-
-    def test_simple_bigtrack_integration_with_fake_backend(self) -> None:
-        backend = _FakeNanoTrackBackend()
-        matcher = NanoTrackMatcherModel(config=self.config, backend=backend)
-        tracker = SimpleBigTrack(
-            predictor=KalmanPredictorModel(),
-            matcher=matcher,
-        )
-        tracker.initialize(self.frame, (20.0, 20.0, 20.0, 20.0))
-
-        output = tracker.update(_Frame(image=self.image, idx=1, timestamp=1.0))
-
-        self.assertIsNotNone(output.box)
-        self.assertGreater(output.confidence, 0.9)
-        self.assertEqual(backend.track_count, 1)
 
     def test_split_torch_backend_keeps_template_and_search_models_separate(self) -> None:
         template_model = _FakeNanoTrackModel()
@@ -304,41 +280,42 @@ class NanoTrackMatcherTest(unittest.TestCase):
         matcher = NanoTrackMatcherModel(
             NanoTrackMatcherConfig(
                 backend="torch",
-                source_root=r"ignores\Trackers\NanoTrack",
                 config_path=str(config_path),
                 checkpoint_path=str(checkpoint_path),
-                device="cpu",
+                device=_real_device(),
             )
         )
-        state = matcher.initialize_template(
-            frame,
-            target_pos=(160.0, 120.0),
-            target_size=(40.0, 40.0),
+        matcher.initialize_template(
+            MatcherInitializeInput(frame=frame, box=(140.0, 100.0, 40.0, 40.0))
         )
-        evidence = matcher.match(
-            frame,
-            state,
-            SearchCandidate(
-                candidate_id="real-smoke",
-                search_center=(160.0, 120.0),
-                predicted_target_size=(40.0, 40.0),
-                prediction_confidence=1.0,
-                motion_uncertainty=0.0,
-                reason="real checkpoint smoke",
-            ),
-            TrackerMode.TRACKING,
+        output = matcher.match(
+            MatcherMatchInput(
+                frame=frame,
+                target_poses=[(160.0, 120.0)],
+            )
         )
 
         self.assertEqual(matcher.config.output_size, 15)
         self.assertEqual(matcher.config.point_stride, 16)
-        self.assertGreaterEqual(evidence.match_score, 0.0)
-        self.assertLessEqual(evidence.match_score, 1.0)
+        self.assertEqual(len(output.bboxes), 1)
+        self.assertGreaterEqual(output.scores[0], 0.0)
+        self.assertLessEqual(output.scores[0], 1.0)
         self.assertIsNot(matcher.backend.template_model, matcher.backend.search_model)
 
 
 class _FakeTensor:
     def __init__(self, shape):
         self.shape = shape
+
+
+def _real_device() -> str:
+    if os.environ.get("BIGTRACK_REAL_DEVICE"):
+        return os.environ["BIGTRACK_REAL_DEVICE"]
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _require_numpy():

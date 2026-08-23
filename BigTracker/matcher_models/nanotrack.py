@@ -1,18 +1,31 @@
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 from BigTracker.matcher import MatcherModel
-from BigTracker.matcher_models._boxes import center_size_to_box
-from BigTracker.matcher_models._crop import nanotrack_subwindow
+from BigTracker.matcher_models._boxes import box_to_center_size, center_size_to_box
+from BigTracker.matcher_models._crop import CropResult, crop_centered
 from BigTracker.matcher_models._templates import update_template_bank
-from BigTracker.matcher_models._torch import inference_context, move_to_device, resolve_device
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import Box, FrameLike, Point, Size, TrackerMode
+from BigTracker.matcher_models._torch import inference_context, resolve_device
+from BigTracker.thirdparty.nanotrack import build_nanotrack_model, load_nanotrack_config
+from BigTracker.types import (
+    Box,
+    FrameLike,
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchInput,
+    MatcherMatchOutput,
+    MatcherState,
+    MatcherTemplateInput,
+    MatcherTemplateOutput,
+    MatcherUpdateInput,
+    MatcherUpdateOutput,
+    Point,
+    Size,
+)
 
 
 class NanoTrackBackend(Protocol):
@@ -39,7 +52,6 @@ class NanoTrackMatcherConfig:
     """Configuration for the NanoTrack matcher wrapper."""
 
     backend: str = "torch"
-    source_root: str = "ignores/Trackers/NanoTrack"
     config_path: Optional[str] = None
     checkpoint_path: Optional[str] = None
     backbone_path: Optional[str] = None
@@ -104,107 +116,127 @@ class NanoTrackMatcherModel(MatcherModel):
         self.backend.eval()
         self.points = self._generate_points(self.config.point_stride, self.config.output_size)
         self.window = self._generate_window(self.config.output_size)
+        self._state: Optional[MatcherState] = None
 
-    def initialize_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-    ) -> MatcherState:
+    def initialize_template(self, request: MatcherInitializeInput) -> MatcherInitializeOutput:
         """Create protected initial and adaptive templates for one object."""
 
-        template = self._build_template(frame, target_pos, target_size)
-        return MatcherState(
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(ok=True, metadata={"matcher": "nanotrack", "restored": True})
+
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        self._state = MatcherState(
             init_template=template,
             best_templates=(),
             adaptive_template=template,
-            cached_features={"matcher": "nanotrack"},
+            metadata={"matcher": "nanotrack"},
         )
-
-    def extract_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-        previous_state: MatcherState,
-    ) -> TemplateCandidate:
-        """Build a template candidate from a BigTrack-approved target."""
-
-        template = self._build_template(frame, target_pos, target_size)
-        return TemplateCandidate(
-            template=template,
-            source_frame_idx=frame.idx,
-            source_box=center_size_to_box(target_pos, target_size),
-            quality_score=1.0,
-            identity_score=1.0,
+        return MatcherInitializeOutput(
+            ok=True,
             metadata={
                 "matcher": "nanotrack",
-                "previous_best_template_count": len(previous_state.best_templates),
+                "template_source_frame_idx": template.source_frame_idx,
                 "was_clipped": template.was_clipped,
             },
         )
 
-    def update_templates(
-        self,
-        state: MatcherState,
-        template: TemplateCandidate,
-    ) -> MatcherState:
-        """Insert an approved template and select the best one in the window."""
+    def extract_template(self, request: MatcherTemplateInput) -> MatcherTemplateOutput:
+        """Build a template candidate from a BigTrack-approved target."""
 
-        return update_template_bank(state, template, self.config.max_best_templates)
-
-    def match(
-        self,
-        frame: FrameLike,
-        matcher_state: MatcherState,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
-    ) -> MatchEvidence:
-        """Run NanoTrack search for one candidate and return evidence only."""
-
-        template = self._select_template(matcher_state)
-        self._activate_template(template)
-
-        search_crop, scale_z = self._build_search_crop(
-            frame=frame,
-            search_center=candidate.search_center,
-            predicted_target_size=candidate.predicted_target_size,
-            pad_value=template.pad_value,
-        )
-        outputs = self._track_backend(search_crop.image)
-        score = self._convert_score(outputs["cls"])
-        pred_bbox = self._convert_bbox(outputs["loc"], self.points)
-        result = self._decode_prediction(
-            score=score,
-            pred_bbox=pred_bbox,
-            scale_z=scale_z,
-            search_center=candidate.search_center,
-            predicted_target_size=candidate.predicted_target_size,
-            image_shape=frame.image.shape,
-        )
-
-        return MatchEvidence(
-            candidate_id=candidate.candidate_id,
-            box=result["box"],
-            match_score=result["best_score"],
-            identity_score=result["best_score"],
-            appearance_score=result["best_score"],
-            localization_score=result["localization_score"],
-            ambiguity_score=result["ambiguity_score"],
-            scale_score=result["scale_score"],
-            occlusion_score=max(0.0, min(1.0, 1.0 - result["best_score"])),
-            is_clipped=search_crop.is_clipped or result["was_clipped"],
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        return MatcherTemplateOutput(
+            template=template,
+            score=1.0,
             metadata={
                 "matcher": "nanotrack",
-                "mode": mode.value,
-                "best_idx": result["best_idx"],
-                "penalty": result["penalty"],
-                "pscore": result["pscore"],
-                "scale_z": scale_z,
-                "search_crop_box": search_crop.crop_box,
-                "template_source_frame_idx": template.source_frame_idx,
+                "previous_best_template_count": len(self._require_state().best_templates),
+                "source_frame_idx": request.frame.idx,
+                "source_box": template.source_box,
+                "was_clipped": template.was_clipped,
             },
         )
+
+    def update_templates(self, request: MatcherUpdateInput) -> MatcherUpdateOutput:
+        """Insert an approved template and select the best one in the window."""
+
+        self._state = update_template_bank(
+            self._require_state(),
+            request.template,
+            request.score,
+            self.config.max_best_templates,
+        )
+        return MatcherUpdateOutput(ok=True, metadata={"matcher": "nanotrack"})
+
+    def match(self, request: MatcherMatchInput) -> MatcherMatchOutput:
+        """Run NanoTrack search for each requested target position."""
+
+        matcher_state = self._require_state()
+        template = self._select_template(matcher_state)
+        self._activate_template(template)
+        target_size = template.target_size
+        bboxes: list[Box] = []
+        scores: list[float] = []
+        details: list[dict[str, Any]] = []
+
+        for target_index, target_pos in enumerate(request.target_poses):
+            search_crop, scale_z = self._build_search_crop(
+                frame=request.frame,
+                search_center=target_pos,
+                predicted_target_size=target_size,
+                pad_value=template.pad_value,
+            )
+            outputs = self._track_backend(search_crop.image)
+            score = self._convert_score(outputs["cls"])
+            pred_bbox = self._convert_bbox(outputs["loc"], self.points)
+            result = self._decode_prediction(
+                score=score,
+                pred_bbox=pred_bbox,
+                scale_z=scale_z,
+                search_center=target_pos,
+                predicted_target_size=target_size,
+                image_shape=request.frame.image.shape,
+            )
+
+            bboxes.append(result["box"])
+            scores.append(result["best_score"])
+            details.append(
+                {
+                    "target_index": target_index,
+                    "best_idx": result["best_idx"],
+                    "penalty": result["penalty"],
+                    "pscore": result["pscore"],
+                    "scale_z": scale_z,
+                    "localization_score": result["localization_score"],
+                    "ambiguity_score": result["ambiguity_score"],
+                    "scale_score": result["scale_score"],
+                    "search_crop_box": search_crop.crop_box,
+                    "template_source_frame_idx": template.source_frame_idx,
+                    "is_clipped": search_crop.is_clipped or result["was_clipped"],
+                }
+            )
+
+        return MatcherMatchOutput(
+            bboxes=bboxes,
+            scores=scores,
+            metadata={
+                "matcher": "nanotrack",
+                "target_size": target_size,
+                "details": details,
+            },
+        )
+
+    def reset(self) -> None:
+        """Clear matcher runtime state."""
+
+        self._state = None
+
+    def close(self) -> None:
+        """Release matcher runtime state."""
+
+        self.reset()
 
     def _build_template(
         self,
@@ -216,7 +248,7 @@ class NanoTrackMatcherModel(MatcherModel):
 
         pad_value = 0
         crop_size = self._template_crop_size(target_size)
-        crop = nanotrack_subwindow(
+        crop = self._subwindow(
             image=frame.image,
             center=target_pos,
             model_size=self.config.exemplar_size,
@@ -271,7 +303,8 @@ class NanoTrackMatcherModel(MatcherModel):
         torch = _require_torch()
         if not torch.is_tensor(value):
             value = torch.from_numpy(value)
-        return move_to_device(value.float(), self.device) if self.device is not None else value.float()
+        value = value.float()
+        return value.to(self.device) if self.device is not None and hasattr(value, "to") else value
 
     def _activate_template(self, template: NanoTrackTemplate) -> None:
         """Install a stored template feature before running search."""
@@ -286,6 +319,13 @@ class NanoTrackMatcherModel(MatcherModel):
         if not isinstance(template, NanoTrackTemplate):
             raise TypeError("NanoTrackMatcherModel requires NanoTrackTemplate state")
         return template
+
+    def _require_state(self) -> MatcherState:
+        """Return initialized matcher state."""
+
+        if self._state is None:
+            raise RuntimeError("NanoTrackMatcherModel must be initialized before use")
+        return self._state
 
     def _build_search_crop(
         self,
@@ -302,7 +342,7 @@ class NanoTrackMatcherModel(MatcherModel):
         s_z = math.sqrt(max(w_z * h_z, 1.0))
         scale_z = float(self.config.exemplar_size) / s_z
         s_x = s_z * (float(self.config.instance_size) / float(self.config.exemplar_size))
-        crop = nanotrack_subwindow(
+        crop = self._subwindow(
             image=frame.image,
             center=search_center,
             model_size=self.config.instance_size,
@@ -318,6 +358,36 @@ class NanoTrackMatcherModel(MatcherModel):
         w_z = float(width) + self.config.context_amount * (float(width) + float(height))
         h_z = float(height) + self.config.context_amount * (float(width) + float(height))
         return float(round(math.sqrt(max(w_z * h_z, 1.0))))
+
+    def _subwindow(
+        self,
+        image: Any,
+        center: Point,
+        model_size: int,
+        original_size: float,
+        pad_value: Any,
+    ) -> CropResult:
+        """Extract one NanoTrack square subwindow as NCHW float tensor input."""
+
+        np = _require_numpy()
+        array = np.asarray(image)
+        original_size_int = max(1, int(round(float(original_size))))
+        crop = crop_centered(
+            image=array,
+            center=center,
+            size=(float(original_size_int), float(original_size_int)),
+            output_size=int(model_size),
+            pad_value=pad_value,
+        )
+        patch = np.asarray(crop.image).transpose(2, 0, 1)
+        patch = patch[np.newaxis, :, :, :].astype(np.float32, copy=False)
+        return CropResult(
+            image=patch,
+            resize_factor=crop.resize_factor,
+            crop_box=crop.crop_box,
+            is_clipped=crop.is_clipped,
+            attention_mask=crop.attention_mask,
+        )
 
     def _convert_score(self, score: Any) -> Any:
         """Convert raw NanoTrack classification output to positive-class scores."""
@@ -582,44 +652,30 @@ def _load_real_nanotrack_torch_backend(
     config: NanoTrackMatcherConfig,
     device: Any,
 ) -> tuple[NanoTrackBackend, NanoTrackMatcherConfig]:
-    """Load NanoTrack source modules, config, split torch models, and checkpoint."""
+    """Load NanoTrack config, split torch models, and checkpoint."""
 
-    source_root = Path(config.source_root)
-    config_path = Path(config.config_path) if config.config_path else source_root / "models/config/configv3.yaml"
+    config_path = Path(config.config_path) if config.config_path else (
+        Path("ignores/Models/nanotrack/config/configv3.yaml")
+    )
     checkpoint_path = (
         Path(config.checkpoint_path)
         if config.checkpoint_path
-        else source_root / "models/pretrained/nanotrackv3.pth"
+        else Path("ignores/Models/nanotrack/pretrained/nanotrackv3.pth")
     )
     if not config_path.exists():
         raise FileNotFoundError(f"NanoTrack config does not exist: {config_path}")
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"NanoTrack checkpoint does not exist: {checkpoint_path}")
 
-    inserted = False
-    source_root_str = str(source_root.resolve())
-    if source_root_str not in sys.path:
-        sys.path.insert(0, source_root_str)
-        inserted = True
-    try:
-        from nanotrack.core.config import cfg
-        from nanotrack.models.model_builder import ModelBuilder
-
-        cfg.merge_from_file(str(config_path))
-        effective_config = _config_from_loaded_nanotrack_cfg(config, cfg)
-        template_model = ModelBuilder()
-        search_model = ModelBuilder()
-        _load_nanotrack_checkpoint(template_model, str(checkpoint_path))
-        _load_nanotrack_checkpoint(search_model, str(checkpoint_path))
-        template_model = template_model.to(device)
-        search_model = search_model.to(device)
-        return _SplitNanoTrackTorchBackend(template_model, search_model), effective_config
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(source_root_str)
-            except ValueError:
-                pass
+    loaded_cfg = load_nanotrack_config(config_path)
+    effective_config = _config_from_loaded_nanotrack_cfg(config, loaded_cfg)
+    template_model = build_nanotrack_model()
+    search_model = build_nanotrack_model()
+    _load_nanotrack_checkpoint(template_model, str(checkpoint_path))
+    _load_nanotrack_checkpoint(search_model, str(checkpoint_path))
+    template_model = template_model.to(device)
+    search_model = search_model.to(device)
+    return _SplitNanoTrackTorchBackend(template_model, search_model), effective_config
 
 
 def _load_real_nanotrack_onnx_backend(
@@ -684,8 +740,7 @@ def _load_nanotrack_checkpoint(model: Any, checkpoint_path: str) -> None:
 
 
 def _resolve_nanotrack_config_path(config: NanoTrackMatcherConfig) -> Path:
-    source_root = Path(config.source_root)
-    return Path(config.config_path) if config.config_path else source_root / "models/config/configv3.yaml"
+    return Path(config.config_path) if config.config_path else Path("ignores/Models/nanotrack/config/configv3.yaml")
 
 
 def _resolve_onnx_paths(config: NanoTrackMatcherConfig, config_path: Path) -> tuple[Path, Path, Path]:
@@ -714,7 +769,7 @@ def _resolve_onnx_paths(config: NanoTrackMatcherConfig, config_path: Path) -> tu
 
 
 def _default_onnx_paths(config: NanoTrackMatcherConfig, config_path: Path) -> tuple[Path, Path]:
-    model_root = config_path.parent.parent if config.config_path else Path(config.source_root) / "models"
+    model_root = config_path.parent.parent if config.config_path else Path("ignores/Models/nanotrack")
     version_name = config_path.stem.replace("config", "nanotrack", 1)
     version_dir = model_root / version_name
     backbone_candidates = (
