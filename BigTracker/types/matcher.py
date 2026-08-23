@@ -6,11 +6,19 @@ from BigTracker.types.common import Box, FrameLike, Point
 
 
 @dataclass(frozen=True)
+class TemplateState:
+    """State of a single template."""
+
+    template: Any
+    template_score: float = 1.0
+
+
+@dataclass(frozen=True)
 class MatcherState:
     """Visual-side state owned by the Matcher domain."""
 
     init_template: Any
-    best_templates: Sequence[Any] = field(default_factory=tuple)
+    best_templates: Sequence[TemplateState] = field(default_factory=tuple)
     adaptive_template: Optional[Any] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
