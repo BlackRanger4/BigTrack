@@ -12,7 +12,6 @@ class MatcherState:
     init_template: Any
     best_templates: Sequence[Any] = field(default_factory=tuple)
     adaptive_template: Optional[Any] = None
-    cached_template: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
