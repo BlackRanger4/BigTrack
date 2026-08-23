@@ -1,20 +1,32 @@
 from __future__ import annotations
 
-import copy
 import math
-import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from BigTracker.matcher import MatcherModel
-from BigTracker.matcher_models._boxes import center_size_to_box, clip_box, map_crop_box_back
+from BigTracker.matcher_models._boxes import box_to_center_size, center_size_to_box, clip_box, map_crop_box_back
 from BigTracker.matcher_models._crop import sample_target
 from BigTracker.matcher_models._templates import update_template_bank
 from BigTracker.matcher_models._torch import inference_context, resolve_device
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import Box, FrameLike, Point, Size, TrackerMode
+from BigTracker.thirdparty.mixformerv2 import build_mixformerv2_network, load_mixformerv2_config
+from BigTracker.types import (
+    Box,
+    FrameLike,
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchInput,
+    MatcherMatchOutput,
+    MatcherState,
+    MatcherTemplateInput,
+    MatcherTemplateOutput,
+    MatcherUpdateInput,
+    MatcherUpdateOutput,
+    Point,
+    Size,
+)
 
 
 class MixFormerV2Backend(Protocol):
@@ -40,7 +52,6 @@ BackendFactory = Callable[["MixFormerV2MatcherConfig"], MixFormerV2Backend]
 class MixFormerV2MatcherConfig:
     """Configuration for the MixFormerV2 matcher wrapper."""
 
-    source_root: str = "ignores/Trackers/MixFormerV2"
     config_path: Optional[str] = None
     checkpoint_path: Optional[str] = None
     device: Optional[str] = None
@@ -90,114 +101,142 @@ class MixFormerV2MatcherModel(MatcherModel):
         else:
             self.backend, self.config = _load_real_mixformerv2_backend(self.config)
         self.backend.eval()
+        self._state: Optional[MatcherState] = None
 
-    def initialize_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-    ) -> MatcherState:
+    def initialize_template(self, request: MatcherInitializeInput) -> MatcherInitializeOutput:
         """Create protected initial and adaptive templates for one object."""
 
-        template = self._build_template(frame, target_pos, target_size)
-        return MatcherState(
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(
+                ok=True,
+                metadata={"matcher": "mixformerv2", "variant": self.config.variant, "restored": True},
+            )
+
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        self._state = MatcherState(
             init_template=template,
             best_templates=(),
             adaptive_template=template,
-            cached_features={"matcher": "mixformerv2", "variant": self.config.variant},
+            metadata={"matcher": "mixformerv2", "variant": self.config.variant},
         )
-
-    def extract_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-        previous_state: MatcherState,
-    ) -> TemplateCandidate:
-        """Build a template candidate from a BigTrack-approved target."""
-
-        template = self._build_template(frame, target_pos, target_size)
-        return TemplateCandidate(
-            template=template,
-            source_frame_idx=frame.idx,
-            source_box=center_size_to_box(target_pos, target_size),
-            quality_score=1.0,
-            identity_score=1.0,
+        return MatcherInitializeOutput(
+            ok=True,
             metadata={
                 "matcher": "mixformerv2",
                 "variant": self.config.variant,
-                "previous_best_template_count": len(previous_state.best_templates),
+                "template_source_frame_idx": template.source_frame_idx,
                 "was_clipped": template.was_clipped,
             },
         )
 
-    def update_templates(
-        self,
-        state: MatcherState,
-        template: TemplateCandidate,
-    ) -> MatcherState:
-        """Insert an approved template and select the best one in the window."""
+    def extract_template(self, request: MatcherTemplateInput) -> MatcherTemplateOutput:
+        """Build a template candidate from a BigTrack-approved target."""
 
-        return update_template_bank(state, template, self.config.max_best_templates)
-
-    def match(
-        self,
-        frame: FrameLike,
-        matcher_state: MatcherState,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
-    ) -> MatchEvidence:
-        """Run MixFormerV2 search for one candidate and return evidence only."""
-
-        init_template = self._select_init_template(matcher_state)
-        online_template = self._select_online_template(matcher_state)
-        search_crop = self._build_search_crop(
-            frame=frame,
-            search_center=candidate.search_center,
-            predicted_target_size=candidate.predicted_target_size,
-        )
-        search_tensor = self.backend.preprocess(search_crop.image)
-
-        with inference_context():
-            outputs = self.backend.forward(
-                init_template.template_tensor,
-                online_template.template_tensor,
-                search_tensor,
-            )
-
-        pred_boxes = outputs["pred_boxes"]
-        pred_box = self._prediction_to_crop_box(pred_boxes, search_crop.resize_factor)
-        mapped_box = map_crop_box_back(
-            pred_box_cxcywh=pred_box,
-            crop_center=candidate.search_center,
-            search_size=float(self.config.search_size),
-            resize_factor=search_crop.resize_factor,
-        )
-        clipped_box = clip_box(mapped_box, frame.image.shape, margin=self.config.clip_margin)
-        stats = self._score_stats(outputs)
-
-        return MatchEvidence(
-            candidate_id=candidate.candidate_id,
-            box=clipped_box,
-            match_score=stats["best_score"],
-            identity_score=stats["best_score"],
-            appearance_score=stats["best_score"],
-            localization_score=stats["localization_score"],
-            ambiguity_score=stats["ambiguity_score"],
-            scale_score=_scale_score(candidate.predicted_target_size, (clipped_box[2], clipped_box[3])),
-            occlusion_score=max(0.0, min(1.0, 1.0 - stats["best_score"])),
-            is_clipped=search_crop.is_clipped or _box_changed(mapped_box, clipped_box),
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        return MatcherTemplateOutput(
+            template=template,
+            score=1.0,
             metadata={
                 "matcher": "mixformerv2",
                 "variant": self.config.variant,
-                "mode": mode.value,
-                "score_source": stats["score_source"],
-                "search_crop_box": search_crop.crop_box,
-                "search_resize_factor": search_crop.resize_factor,
-                "init_template_source_frame_idx": init_template.source_frame_idx,
-                "online_template_source_frame_idx": online_template.source_frame_idx,
+                "previous_best_template_count": len(self._require_state().best_templates),
+                "source_frame_idx": request.frame.idx,
+                "source_box": template.source_box,
+                "was_clipped": template.was_clipped,
             },
         )
+
+    def update_templates(self, request: MatcherUpdateInput) -> MatcherUpdateOutput:
+        """Insert an approved template and select the best one in the window."""
+
+        self._state = update_template_bank(
+            self._require_state(),
+            request.template,
+            request.score,
+            self.config.max_best_templates,
+        )
+        return MatcherUpdateOutput(
+            ok=True,
+            metadata={"matcher": "mixformerv2", "variant": self.config.variant},
+        )
+
+    def match(self, request: MatcherMatchInput) -> MatcherMatchOutput:
+        """Run MixFormerV2 search for each requested target position."""
+
+        matcher_state = self._require_state()
+        init_template = self._select_init_template(matcher_state)
+        active_template = self._select_template(matcher_state)
+        target_size = active_template.target_size
+        bboxes: list[Box] = []
+        scores: list[float] = []
+        details: list[dict[str, Any]] = []
+
+        for target_index, target_pos in enumerate(request.target_poses):
+            search_crop = self._build_search_crop(
+                frame=request.frame,
+                search_center=target_pos,
+                predicted_target_size=target_size,
+            )
+            search_tensor = self.backend.preprocess(search_crop.image)
+
+            with inference_context():
+                outputs = self.backend.forward(
+                    init_template.template_tensor,
+                    active_template.template_tensor,
+                    search_tensor,
+                )
+
+            pred_boxes = outputs["pred_boxes"]
+            pred_box = self._prediction_to_crop_box(pred_boxes, search_crop.resize_factor)
+            mapped_box = map_crop_box_back(
+                pred_box_cxcywh=pred_box,
+                crop_center=target_pos,
+                search_size=float(self.config.search_size),
+                resize_factor=search_crop.resize_factor,
+            )
+            clipped_box = clip_box(mapped_box, request.frame.image.shape, margin=self.config.clip_margin)
+            stats = self._score_stats(outputs)
+
+            bboxes.append(clipped_box)
+            scores.append(stats["best_score"])
+            details.append(
+                {
+                    "target_index": target_index,
+                    "score_source": stats["score_source"],
+                    "localization_score": stats["localization_score"],
+                    "ambiguity_score": stats["ambiguity_score"],
+                    "scale_score": _scale_score(target_size, (clipped_box[2], clipped_box[3])),
+                    "search_crop_box": search_crop.crop_box,
+                    "search_resize_factor": search_crop.resize_factor,
+                    "init_template_source_frame_idx": init_template.source_frame_idx,
+                    "active_template_source_frame_idx": active_template.source_frame_idx,
+                    "is_clipped": search_crop.is_clipped or _box_changed(mapped_box, clipped_box),
+                }
+            )
+
+        return MatcherMatchOutput(
+            bboxes=bboxes,
+            scores=scores,
+            metadata={
+                "matcher": "mixformerv2",
+                "variant": self.config.variant,
+                "target_size": target_size,
+                "details": details,
+            },
+        )
+
+    def reset(self) -> None:
+        """Clear matcher runtime state."""
+
+        self._state = None
+
+    def close(self) -> None:
+        """Release matcher runtime state."""
+
+        self.reset()
 
     def _build_template(
         self,
@@ -258,13 +297,20 @@ class MixFormerV2MatcherModel(MatcherModel):
             raise TypeError("MixFormerV2MatcherModel requires MixFormerV2Template state")
         return template
 
-    def _select_online_template(self, matcher_state: MatcherState) -> MixFormerV2Template:
-        """Select the current BigTrack-approved online template."""
+    def _select_template(self, matcher_state: MatcherState) -> MixFormerV2Template:
+        """Select the active template for this match call."""
 
         template = matcher_state.adaptive_template or matcher_state.init_template
         if not isinstance(template, MixFormerV2Template):
             raise TypeError("MixFormerV2MatcherModel requires MixFormerV2Template state")
         return template
+
+    def _require_state(self) -> MatcherState:
+        """Return initialized matcher state."""
+
+        if self._state is None:
+            raise RuntimeError("MixFormerV2MatcherModel must be initialized before use")
+        return self._state
 
     def _prediction_to_crop_box(self, pred_boxes: Any, resize_factor: float) -> Box:
         """Convert normalized MixFormerV2 predictions to crop-local cx, cy, w, h."""
@@ -343,7 +389,6 @@ def _load_real_mixformerv2_backend(
 ) -> tuple[MixFormerV2Backend, MixFormerV2MatcherConfig]:
     """Load MixFormerV2 source modules, YAML config, network, and checkpoint."""
 
-    source_root = Path(config.source_root)
     config_path = Path(config.config_path) if config.config_path else (
         Path("ignores/Models/mixformerv2/config/288_depth8_score.yaml")
     )
@@ -357,51 +402,15 @@ def _load_real_mixformerv2_backend(
 
     device = resolve_device(config.device)
     variant = str(config.variant).lower()
-    _prepare_mixformerv2_source(source_root)
     torch = _require_torch()
-    if variant == "online":
-        from lib.config.mixformer2_vit_online.config import cfg as default_cfg
-        from lib.config.mixformer2_vit_online.config import update_new_config_from_file
-        from lib.models.mixformer2_vit import build_mixformer2_vit_online
-
-        loaded_cfg = update_new_config_from_file(str(config_path))
-        with _source_cuda_build_guard(torch, device):
-            network = build_mixformer2_vit_online(loaded_cfg, train=False)
-    elif variant == "offline":
-        from lib.config.mixformer2_vit.config import cfg as default_cfg
-        from lib.config.mixformer2_vit.config import update_new_config_from_file
-        from lib.models.mixformer2_vit import build_mixformer2_vit
-
-        loaded_cfg = update_new_config_from_file(str(config_path))
-        with _source_cuda_build_guard(torch, device):
-            network = build_mixformer2_vit(loaded_cfg)
-    else:
-        raise ValueError(f"Unknown MixFormerV2 variant: {config.variant!r}")
-
-    if loaded_cfg is default_cfg:
-        loaded_cfg = copy.deepcopy(default_cfg)
+    loaded_cfg = load_mixformerv2_config(config_path, variant)
     effective_config = _config_from_loaded_mixformerv2_cfg(config, loaded_cfg, variant)
+    with _source_cuda_build_guard(torch, device):
+        network = build_mixformerv2_network(loaded_cfg, variant, training=False)
     _load_mixformerv2_checkpoint(network, checkpoint_path)
     network = network.to(device)
     _move_mixformerv2_internal_tensors(network, device)
     return _TorchMixFormerV2Backend(network, loaded_cfg, device), effective_config
-
-
-def _prepare_mixformerv2_source(source_root: Path) -> None:
-    """Expose MixFormerV2's top-level lib package, failing on package conflicts."""
-
-    source_root_str = str(source_root.resolve())
-    existing_lib = sys.modules.get("lib")
-    if existing_lib is not None:
-        existing_file = getattr(existing_lib, "__file__", "")
-        if existing_file and source_root_str not in str(Path(existing_file).resolve()):
-            raise RuntimeError(
-                "MixFormerV2 uses a top-level 'lib' package, but another 'lib' package is already loaded: "
-                f"{existing_file}"
-            )
-
-    if source_root_str not in sys.path:
-        sys.path.insert(0, source_root_str)
 
 
 def _load_mixformerv2_checkpoint(network: Any, checkpoint_path: Path) -> None:
