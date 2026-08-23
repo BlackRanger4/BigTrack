@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from BigTracker.types import MatcherState, TemplateState
+from BigTracker.types.matcher import MatcherState, TemplateState
 
 
 def update_template_bank(
