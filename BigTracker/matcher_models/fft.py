@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Tuple
 
 from BigTracker.matcher import MatcherModel
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import Box, FrameLike, Point, Size, TrackerMode
+from BigTracker.matcher_models._boxes import box_to_center_size, center_size_to_box
+from BigTracker.matcher_models._crop import crop_centered
+from BigTracker.matcher_models._templates import update_template_bank
+from BigTracker.types import (
+    Box,
+    FrameLike,
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchInput,
+    MatcherMatchOutput,
+    MatcherState,
+    MatcherTemplateInput,
+    MatcherTemplateOutput,
+    MatcherUpdateInput,
+    MatcherUpdateOutput,
+    Point,
+    Size,
+)
 
 
 @dataclass(frozen=True)
@@ -55,108 +71,121 @@ class FftMatcherModel(MatcherModel):
 
     This model is useful as a first working tracker backend. It crops its own
     template/search regions, normalizes them, computes `M(f) * conj(G(f))`,
-    and returns a peak-based `MatchEvidence`.
+    and returns peak-based boxes and scores.
     """
 
     def __init__(self, config: Optional[FftMatcherConfig] = None) -> None:
         """Create an FFT matcher with crop sizes and template queue limits."""
 
         self.config = config or FftMatcherConfig()
+        self._state: Optional[MatcherState] = None
 
-    def initialize_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-    ) -> MatcherState:
+    def initialize_template(self, request: MatcherInitializeInput) -> MatcherInitializeOutput:
         """Create matcher state with the first template as protected identity anchor."""
 
-        template = self._build_template(frame, target_pos, target_size)
-        return MatcherState(init_template=template)
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(ok=True, metadata={"matcher": "fft", "restored": True})
 
-    def extract_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-        previous_state: MatcherState,
-    ) -> TemplateCandidate:
-        """Create a candidate template from a BigTrack-approved target region."""
-
-        template = self._build_template(frame, target_pos, target_size)
-        return TemplateCandidate(
-            template=template,
-            source_frame_idx=frame.idx,
-            source_box=_center_size_to_box(target_pos, target_size),
-            quality_score=1.0,
-            identity_score=1.0,
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        self._state = MatcherState(
+            init_template=template,
+            best_templates=(),
+            adaptive_template=template,
+            metadata={"matcher": "fft"},
+        )
+        return MatcherInitializeOutput(
+            ok=True,
             metadata={
                 "matcher": "fft",
                 "template_crop_size": template.crop_size,
                 "was_clipped": template.clipped,
-                "previous_best_template_count": len(previous_state.best_templates),
             },
         )
 
-    def update_templates(
-        self,
-        state: MatcherState,
-        template: TemplateCandidate,
-    ) -> MatcherState:
-        """Insert an approved template while keeping the initial template unchanged."""
+    def extract_template(self, request: MatcherTemplateInput) -> MatcherTemplateOutput:
+        """Create a candidate template from a BigTrack-approved target region."""
 
-        best_templates = tuple(state.best_templates) + (template.template,)
-        if len(best_templates) > self.config.max_best_templates:
-            best_templates = best_templates[-self.config.max_best_templates :]
-
-        return replace(
-            state,
-            best_templates=best_templates,
-            adaptive_template=template.template,
+        target_pos, target_size = box_to_center_size(request.box)
+        template = self._build_template(request.frame, target_pos, target_size)
+        return MatcherTemplateOutput(
+            template=template,
+            score=1.0,
+            metadata={
+                "matcher": "fft",
+                "template_crop_size": template.crop_size,
+                "was_clipped": template.clipped,
+                "source_frame_idx": request.frame.idx,
+                "source_box": template.source_box,
+                "previous_best_template_count": len(self._require_state().best_templates),
+            },
         )
 
-    def match(
-        self,
-        frame: FrameLike,
-        matcher_state: MatcherState,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
-    ) -> MatchEvidence:
-        """Run FFT matching for one search candidate and return evidence only."""
+    def update_templates(self, request: MatcherUpdateInput) -> MatcherUpdateOutput:
+        """Insert an approved template while keeping the initial template unchanged."""
 
+        self._state = update_template_bank(
+            self._require_state(),
+            request.template,
+            request.score,
+            self.config.max_best_templates,
+        )
+        return MatcherUpdateOutput(ok=True, metadata={"matcher": "fft"})
+
+    def match(self, request: MatcherMatchInput) -> MatcherMatchOutput:
+        """Run FFT matching for each requested target position."""
+
+        matcher_state = self._require_state()
         templates = self._collect_templates(matcher_state)
         if not templates:
             raise ValueError("FftMatcherModel.match requires at least one template")
 
-        results = [
-            self._match_one_template(frame, template, candidate, mode, index)
-            for index, template in enumerate(templates)
-        ]
-        best = max(results, key=lambda result: result.match_score)
-        scale_score = self._score_scale(candidate.predicted_target_size, best.box)
-        identity_score = best.match_score
+        target_size = self._active_target_size(matcher_state)
+        bboxes: list[Box] = []
+        scores: list[float] = []
+        details: list[dict[str, Any]] = []
+        for target_index, target_pos in enumerate(request.target_poses):
+            results = [
+                self._match_one_template(request.frame, template, target_pos, target_size, index)
+                for index, template in enumerate(templates)
+            ]
+            best = max(results, key=lambda result: result.match_score)
+            bboxes.append(best.box)
+            scores.append(best.match_score)
+            details.append(
+                {
+                    "target_index": target_index,
+                    "selected_template_index": best.selected_template_index,
+                    "localization_score": best.localization_score,
+                    "ambiguity_score": best.ambiguity_score,
+                    "peak_value": best.peak_value,
+                    "second_peak_value": best.second_peak_value,
+                    "search_box": best.search_box,
+                    "is_clipped": best.is_clipped,
+                }
+            )
 
-        return MatchEvidence(
-            candidate_id=candidate.candidate_id,
-            box=best.box,
-            match_score=best.match_score,
-            identity_score=identity_score,
-            appearance_score=best.match_score,
-            localization_score=best.localization_score,
-            ambiguity_score=best.ambiguity_score,
-            scale_score=scale_score,
-            occlusion_score=_clamp01(1.0 - identity_score),
-            is_clipped=best.is_clipped,
+        return MatcherMatchOutput(
+            bboxes=bboxes,
+            scores=scores,
             metadata={
                 "matcher": "fft",
-                "mode": mode.value,
                 "template_count": len(templates),
-                "selected_template_index": best.selected_template_index,
-                "peak_value": best.peak_value,
-                "second_peak_value": best.second_peak_value,
-                "search_box": best.search_box,
+                "target_size": target_size,
+                "details": details,
             },
         )
+
+    def reset(self) -> None:
+        """Clear matcher runtime state."""
+
+        self._state = None
+
+    def close(self) -> None:
+        """Release matcher runtime state."""
+
+        self.reset()
 
     def _build_template(self, frame: FrameLike, target_pos: Point, target_size: Size) -> FftTemplate:
         """Crop, normalize, and encode one FFT template."""
@@ -164,37 +193,37 @@ class FftMatcherModel(MatcherModel):
         np = _require_numpy()
         image = _as_gray_float(frame.image)
         crop_size = self._template_crop_size(target_size)
-        patch, _, clipped = _crop_centered(image, target_pos, crop_size)
-        patch = _normalize_patch(patch)
+        crop = crop_centered(image, target_pos, crop_size)
+        patch = _normalize_patch(crop.image)
         return FftTemplate(
             patch=patch,
             spectrum=np.fft.fft2(patch),
             target_size=target_size,
             crop_size=(float(patch.shape[1]), float(patch.shape[0])),
             source_frame_idx=frame.idx,
-            source_box=_center_size_to_box(target_pos, target_size),
-            clipped=clipped,
+            source_box=center_size_to_box(target_pos, target_size),
+            clipped=crop.is_clipped,
         )
 
     def _match_one_template(
         self,
         frame: FrameLike,
         template: FftTemplate,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
+        search_center: Point,
+        target_size: Size,
         template_index: int,
     ) -> _FftMatchResult:
         """Match one encoded template against one search crop."""
 
         np = _require_numpy()
         image = _as_gray_float(frame.image)
-        search_size = self._search_crop_size(candidate.predicted_target_size, mode)
-        search_patch, search_box, search_clipped = _crop_centered(
+        search_size = self._search_crop_size(target_size)
+        search_crop = crop_centered(
             image,
-            candidate.search_center,
+            search_center,
             search_size,
         )
-        search_patch = _normalize_patch(search_patch)
+        search_patch = _normalize_patch(search_crop.image)
 
         template_canvas = np.zeros_like(search_patch)
         _paste_center(template_canvas, template.patch)
@@ -209,10 +238,10 @@ class FftMatcherModel(MatcherModel):
         offset_x = float(peak_x - center_x)
         offset_y = float(peak_y - center_y)
         matched_center = (
-            candidate.search_center[0] + offset_x,
-            candidate.search_center[1] + offset_y,
+            search_center[0] + offset_x,
+            search_center[1] + offset_y,
         )
-        matched_box = _center_size_to_box(matched_center, candidate.predicted_target_size)
+        matched_box = center_size_to_box(matched_center, target_size)
 
         peak_value, second_peak_value, match_score, ambiguity_score = self._score_response(
             response,
@@ -231,15 +260,15 @@ class FftMatcherModel(MatcherModel):
             peak_value=peak_value,
             second_peak_value=second_peak_value,
             selected_template_index=template_index,
-            is_clipped=search_clipped,
-            search_box=search_box,
+            is_clipped=search_crop.is_clipped,
+            search_box=search_crop.crop_box,
         )
 
     def _collect_templates(self, matcher_state: MatcherState) -> Sequence[FftTemplate]:
         """Return all templates that should vote during matching."""
 
         templates = [matcher_state.init_template]
-        templates.extend(matcher_state.best_templates)
+        templates.extend(template_state.template for template_state in matcher_state.best_templates)
         if matcher_state.adaptive_template is not None:
             templates.append(matcher_state.adaptive_template)
         return tuple(template for template in templates if isinstance(template, FftTemplate))
@@ -251,15 +280,10 @@ class FftMatcherModel(MatcherModel):
         side = max(side, float(self.config.min_crop_size))
         return (side, side)
 
-    def _search_crop_size(self, target_size: Size, mode: TrackerMode) -> Size:
-        """Choose a square search crop from target size and tracker mode."""
+    def _search_crop_size(self, target_size: Size) -> Size:
+        """Choose a square search crop from target size."""
 
         factor = self.config.search_area_factor
-        if mode in {TrackerMode.UNCERTAIN, TrackerMode.OCCLUDED}:
-            factor = self.config.uncertain_search_area_factor
-        elif mode is TrackerMode.RECOVERY:
-            factor = self.config.recovery_search_area_factor
-
         side = factor * _target_side(target_size)
         side = max(side, float(self.config.min_crop_size))
         return (side, side)
@@ -298,12 +322,20 @@ class FftMatcherModel(MatcherModel):
 
         return peak_value, second_peak_value, match_score, ambiguity_score
 
-    def _score_scale(self, expected_size: Size, box: Box) -> float:
-        """Score whether the returned box scale is compatible with prediction."""
+    def _active_target_size(self, matcher_state: MatcherState) -> Size:
+        """Return target size from the currently active FFT template."""
 
-        expected_area = max(expected_size[0] * expected_size[1], 1e-6)
-        found_area = max(box[2] * box[3], 1e-6)
-        return _clamp01(math.exp(-abs(math.log(found_area / expected_area))))
+        template = matcher_state.adaptive_template or matcher_state.init_template
+        if not isinstance(template, FftTemplate):
+            raise TypeError("FftMatcherModel requires FftTemplate state")
+        return template.target_size
+
+    def _require_state(self) -> MatcherState:
+        """Return initialized matcher state."""
+
+        if self._state is None:
+            raise RuntimeError("FftMatcherModel must be initialized before use")
+        return self._state
 
 
 def _require_numpy() -> Any:
@@ -340,35 +372,6 @@ def _normalize_patch(patch: Any) -> Any:
     return (patch - mean) / std
 
 
-def _crop_centered(image: Any, center: Point, size: Size) -> Tuple[Any, Box, bool]:
-    """Crop a centered region and zero-pad when it crosses frame boundaries."""
-
-    np = _require_numpy()
-    height, width = image.shape[:2]
-    crop_width = max(1, int(round(size[0])))
-    crop_height = max(1, int(round(size[1])))
-    left = int(round(center[0] - crop_width / 2.0))
-    top = int(round(center[1] - crop_height / 2.0))
-    right = left + crop_width
-    bottom = top + crop_height
-
-    src_left = max(0, left)
-    src_top = max(0, top)
-    src_right = min(width, right)
-    src_bottom = min(height, bottom)
-
-    crop = np.zeros((crop_height, crop_width), dtype=image.dtype)
-    if src_right > src_left and src_bottom > src_top:
-        dst_left = src_left - left
-        dst_top = src_top - top
-        dst_right = dst_left + (src_right - src_left)
-        dst_bottom = dst_top + (src_bottom - src_top)
-        crop[dst_top:dst_bottom, dst_left:dst_right] = image[src_top:src_bottom, src_left:src_right]
-
-    clipped = src_left != left or src_top != top or src_right != right or src_bottom != bottom
-    return crop, (float(left), float(top), float(crop_width), float(crop_height)), clipped
-
-
 def _paste_center(canvas: Any, patch: Any) -> None:
     """Paste a patch into the center of a same-or-larger canvas."""
 
@@ -402,17 +405,6 @@ def _target_side(target_size: Size) -> float:
     width = max(float(target_size[0]), 1.0)
     height = max(float(target_size[1]), 1.0)
     return math.sqrt(width * height)
-
-
-def _center_size_to_box(center: Point, size: Size) -> Box:
-    """Convert center and size into frame-coordinate x, y, width, height."""
-
-    return (
-        float(center[0] - size[0] / 2.0),
-        float(center[1] - size[1] / 2.0),
-        float(size[0]),
-        float(size[1]),
-    )
 
 
 def _clamp01(value: float) -> float:
