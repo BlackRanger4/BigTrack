@@ -3,25 +3,23 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Sequence
 
+from BigTracker.big_trackers._decision import BigTrackDecision, SearchCandidate
 from BigTracker.big_trackers.base import BaseBigTrack
-from BigTracker.state import (
-    BigTrackDecision,
+from BigTracker.types import (
     BigTrackState,
-    MatchEvidence,
-    SearchCandidate,
+    BigTrackUpdateOutput,
+    Box,
+    FrameLike,
+    OutputStatus,
+    Point,
+    PredictorUpdateInput,
+    TrackerMode,
     TrackerPredictionState,
-    TrackingOutput,
 )
-from BigTracker.types import Box, FrameLike, OutputStatus, Point, Size, TrackerMode
 
 
 class SimpleBigTrack(BaseBigTrack):
-    """Minimal tracker policy that blindly trusts the matcher.
-
-    This class is for first integration tests. It does not threshold scores,
-    does not create recovery candidates, does not handle lost state, and does
-    not update templates.
-    """
+    """Minimal tracker policy that blindly trusts the matcher."""
 
     def make_candidates(
         self,
@@ -29,14 +27,11 @@ class SimpleBigTrack(BaseBigTrack):
         prediction: TrackerPredictionState,
         frame: FrameLike,
     ) -> Sequence[SearchCandidate]:
-        """Create one search candidate at the predictor's target position."""
-
         return (
             SearchCandidate(
                 candidate_id="predicted",
                 search_center=prediction.target_pos,
-                predicted_target_size=prediction.target_size,
-                prediction_confidence=prediction.last_score,
+                prediction_confidence=1.0,
                 motion_uncertainty=prediction.uncertainty,
                 reason="simple_predicted_position",
                 metadata={
@@ -52,23 +47,21 @@ class SimpleBigTrack(BaseBigTrack):
         state: BigTrackState,
         prediction: TrackerPredictionState,
         candidates: Sequence[SearchCandidate],
-        matches: Sequence[MatchEvidence],
+        bboxes: Sequence[Box],
+        scores: Sequence[float],
     ) -> BigTrackDecision:
-        """Accept the first matcher result without score thresholds."""
-
-        if not matches:
+        if not bboxes or not scores:
             raise ValueError("SimpleBigTrack requires one matcher result")
 
-        match = matches[0]
-        accepted_pos, accepted_size = _box_to_center_size(match.box)
+        box = bboxes[0]
+        score = scores[0]
         return BigTrackDecision(
             accepted=True,
-            accepted_box=match.box,
-            accepted_target_pos=accepted_pos,
-            accepted_target_size=accepted_size,
+            accepted_box=box,
+            accepted_target_pos=_box_to_center(box),
             output_status=OutputStatus.ACTIVE,
             next_mode=TrackerMode.TRACKING,
-            confidence=match.match_score,
+            confidence=score,
             allow_template_update=False,
             reason="simple_trust_matcher",
         )
@@ -80,51 +73,46 @@ class SimpleBigTrack(BaseBigTrack):
         decision: BigTrackDecision,
         frame: FrameLike,
     ) -> BigTrackState:
-        """Apply the accepted matcher box as the new tracker state."""
-
         if not decision.accepted:
             raise ValueError("SimpleBigTrack does not support rejected decisions")
-        if decision.accepted_box is None:
-            raise ValueError("SimpleBigTrack accepted decision requires a box")
-        if decision.accepted_target_pos is None or decision.accepted_target_size is None:
+        if decision.accepted_box is None or decision.accepted_target_pos is None:
             raise ValueError("SimpleBigTrack accepted decision requires target geometry")
 
-        predicted_state = replace(state, prediction=prediction)
-        next_prediction = self.predictor.update_from_accept(
-            state=predicted_state,
-            accepted_pos=decision.accepted_target_pos,
-            accepted_size=decision.accepted_target_size,
-            score=decision.confidence,
+        next_prediction = replace(prediction, target_pos=decision.accepted_target_pos)
+        self.predictor.update(
+            PredictorUpdateInput(
+                accepted=True,
+                predictor_state=next_prediction,
+                metadata={"score": decision.confidence},
+            )
         )
-        output = TrackingOutput(
+        output = BigTrackUpdateOutput(
+            ok=True,
             box=decision.accepted_box,
             frame_idx=frame.idx,
             timestamp=frame.timestamp,
             status=decision.output_status,
             confidence=decision.confidence,
         )
-        counters = replace(
-            state.counters,
-            age=state.counters.age + 1,
-            lost_count=0,
-            uncertain_count=0,
-            recovery_count=0,
-        )
+        metadata = {
+            **dict(state.metadata),
+            "age": int(state.metadata.get("age", 0)) + 1,
+            "target_size": _box_size(decision.accepted_box),
+        }
         return replace(
             state,
-            prediction=next_prediction,
+            predictor_state=next_prediction,
             output=output,
             mode=decision.next_mode,
-            counters=counters,
             last_seen_frame=frame.idx,
+            metadata=metadata,
         )
 
 
-def _box_to_center_size(box: Box) -> tuple[Point, Size]:
-    """Convert frame-coordinate x, y, width, height into center point and size."""
-
+def _box_to_center(box: Box) -> Point:
     x, y, width, height = box
-    return (
-        (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0),
-        (float(width), float(height)),
-    )
+    return (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0)
+
+
+def _box_size(box: Box) -> tuple[float, float]:
+    return (float(box[2]), float(box[3]))
