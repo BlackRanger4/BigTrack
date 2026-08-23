@@ -1,0 +1,1 @@
+"""LiteTrack config module."""
