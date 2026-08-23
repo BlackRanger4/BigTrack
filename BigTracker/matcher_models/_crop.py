@@ -67,36 +67,6 @@ def sample_target(
     )
 
 
-def nanotrack_subwindow(
-    image: Any,
-    center: Point,
-    model_size: int,
-    original_size: float,
-    pad_value: Any,
-) -> CropResult:
-    """Extract a NanoTrack/Siamese square subwindow as NCHW float tensor input."""
-
-    np = _require_numpy()
-    array = np.asarray(image)
-    original_size_int = max(1, int(round(float(original_size))))
-    crop = crop_centered(
-        image=array,
-        center=center,
-        size=(float(original_size_int), float(original_size_int)),
-        output_size=int(model_size),
-        pad_value=pad_value,
-    )
-    patch = np.asarray(crop.image).transpose(2, 0, 1)
-    patch = patch[np.newaxis, :, :, :].astype(np.float32, copy=False)
-    return CropResult(
-        image=patch,
-        resize_factor=crop.resize_factor,
-        crop_box=crop.crop_box,
-        is_clipped=crop.is_clipped,
-        attention_mask=crop.attention_mask,
-    )
-
-
 def _crop_xywh(
     image: Any,
     left: int,

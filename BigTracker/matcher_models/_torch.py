@@ -34,14 +34,6 @@ def load_checkpoint(checkpoint_path: str, map_location: Any = "cpu") -> Any:
     return torch.load(str(path), map_location=map_location)
 
 
-def move_to_device(value: Any, device: Any) -> Any:
-    """Move a torch-like value to a device when it supports `.to(...)`."""
-
-    if hasattr(value, "to"):
-        return value.to(device)
-    return value
-
-
 @contextmanager
 def inference_context() -> Iterator[None]:
     """Run torch inference without gradients."""
@@ -49,4 +41,3 @@ def inference_context() -> Iterator[None]:
     torch = require_torch()
     with torch.no_grad():
         yield
-
