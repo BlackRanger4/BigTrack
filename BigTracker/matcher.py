@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import FrameLike, Point, Size, TrackerMode
+from BigTracker.types import (
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchInput,
+    MatcherMatchOutput,
+    MatcherTemplateInput,
+    MatcherTemplateOutput,
+    MatcherUpdateInput,
+    MatcherUpdateOutput,
+)
 
 
 class Matcher(ABC):
@@ -15,46 +23,34 @@ class Matcher(ABC):
     """
 
     @abstractmethod
-    def initialize_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-    ) -> MatcherState:
-        """Create the first trusted identity template from an initialized target."""
+    def initialize_template(self, request: MatcherInitializeInput) -> MatcherInitializeOutput:
+        """Initialize or restore matcher template state from the initial frame and box."""
         ...
 
     @abstractmethod
-    def extract_template(
-        self,
-        frame: FrameLike,
-        target_pos: Point,
-        target_size: Size,
-        previous_state: MatcherState,
-    ) -> TemplateCandidate:
-        """Build a model-specific template candidate from an approved target."""
+    def extract_template(self, request: MatcherTemplateInput) -> MatcherTemplateOutput:
+        """Extract a model-specific template from a BigTrack-approved frame box."""
         ...
 
     @abstractmethod
-    def update_templates(
-        self,
-        state: MatcherState,
-        template: TemplateCandidate,
-    ) -> MatcherState:
-        """Insert a BigTrack-approved template candidate into matcher state."""
+    def update_templates(self, request: MatcherUpdateInput) -> MatcherUpdateOutput:
+        """Commit a BigTrack-approved template update into matcher-owned state."""
         ...
 
     @abstractmethod
-    def match(
-        self,
-        frame: FrameLike,
-        matcher_state: MatcherState,
-        candidate: SearchCandidate,
-        mode: TrackerMode,
-    ) -> MatchEvidence:
-        """Search one candidate region and return visual evidence only."""
+    def match(self, request: MatcherMatchInput) -> MatcherMatchOutput:
+        """Search one frame around each target position and return one best box per target."""
         ...
 
+    @abstractmethod
+    def reset(self) -> None:
+        """Clear matcher runtime state without unloading reusable model resources."""
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release model/session resources held by the matcher."""
+        ...
 
 class MatcherModel(Matcher):
     """Base class for concrete matcher models in BigTracker/matcher_models."""

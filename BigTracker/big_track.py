@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Sequence
 
 from BigTracker.matcher import Matcher
 from BigTracker.predictor import Predictor
-from BigTracker.state import (
-    BigTrackDecision,
+from BigTracker.types import (
+    BigTrackInitializeInput,
+    BigTrackInitializeOutput,
     BigTrackState,
-    MatchEvidence,
-    SearchCandidate,
-    TrackerPredictionState,
-    TrackingOutput,
+    BigTrackUpdateInput,
+    BigTrackUpdateOutput,
 )
-from BigTracker.types import Box, FrameLike, Point, Size
 
 
 class BigTrack(ABC):
@@ -28,70 +25,31 @@ class BigTrack(ABC):
     matcher: Matcher
 
     @abstractmethod
-    def initialize(
-        self,
-        frame: FrameLike,
-        box: Box,
-        target_velocity: Optional[Point] = None,
-        target_size_velocity: Optional[Size] = None,
-        initial_confidence: float = 1.0,
-    ) -> BigTrackState:
-        """Initialize prediction state, matcher templates, mode, counters, and output."""
+    def initialize(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
+        """Initialize predictor state, matcher template state, and BigTrack runtime state."""
         ...
 
     @abstractmethod
-    def initialize_from_state(self, state: BigTrackState) -> BigTrackState:
-        """Initialize this tracker from a previously captured internal state."""
+    def initialize_from_state(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
+        """Restore BigTrack using provided predictor and matcher state in the request."""
         ...
 
     @abstractmethod
-    def update(self, frame: FrameLike) -> TrackingOutput:
-        """Process one frame through prediction, matching, decision, and state update."""
-        ...
-
-    @abstractmethod
-    def make_candidates(
-        self,
-        state: BigTrackState,
-        prediction: TrackerPredictionState,
-        frame: FrameLike,
-    ) -> Sequence[SearchCandidate]:
-        """Create search candidates from prediction and current tracker mode."""
+    def update(self, request: BigTrackUpdateInput) -> BigTrackUpdateOutput:
+        """Process one frame and return the public tracking output."""
         ...
 
     @abstractmethod
     def reset(self) -> None:
-        """Clear internal state and latest output."""
+        """Clear runtime state while keeping constructed predictor and matcher objects reusable."""
         ...
 
     @abstractmethod
-    def get_state(self) -> Optional[BigTrackState]:
-        """Return internal state for debugging, checkpointing, or advanced users."""
+    def close(self) -> None:
+        """Release resources owned directly by BigTrack and its child components."""
         ...
 
     @abstractmethod
-    def get_output(self) -> Optional[TrackingOutput]:
-        """Return the latest small client-facing output."""
-        ...
-
-    @abstractmethod
-    def decide(
-        self,
-        state: BigTrackState,
-        prediction: TrackerPredictionState,
-        candidates: Sequence[SearchCandidate],
-        matches: Sequence[MatchEvidence],
-    ) -> BigTrackDecision:
-        """Accept, reject, recover, lose, and decide whether templates may update."""
-        ...
-
-    @abstractmethod
-    def apply_decision(
-        self,
-        state: BigTrackState,
-        prediction: TrackerPredictionState,
-        decision: BigTrackDecision,
-        frame: FrameLike,
-    ) -> BigTrackState:
-        """Apply decision results to prediction state, matcher state, output, and mode."""
+    def get_state(self) -> BigTrackState:
+        """Return the latest composed predictor, matcher, and BigTrack state."""
         ...

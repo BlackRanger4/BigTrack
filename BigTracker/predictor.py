@@ -2,32 +2,42 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from BigTracker.state import BigTrackState, TrackerPredictionState
-from BigTracker.types import FrameLike, Point, Size
+from BigTracker.types import (
+    PredictorInitializeInput,
+    PredictorInitializeOutput,
+    PredictorPredictInput,
+    PredictorPredictOutput,
+    PredictorUpdateInput,
+    PredictorUpdateOutput,
+)
 
 
 class Predictor(ABC):
     """Base API for anything that predicts and updates motion state."""
 
     @abstractmethod
-    def predict(self, state: BigTrackState, frame: FrameLike) -> TrackerPredictionState:
-        """Predict target center, target size, velocity, score, and uncertainty."""
+    def initialize(self, request: PredictorInitializeInput) -> PredictorInitializeOutput:
+        """Initialize or restore predictor-owned motion state."""
         ...
 
     @abstractmethod
-    def update_from_accept(
-        self,
-        state: BigTrackState,
-        accepted_pos: Point,
-        accepted_size: Size,
-        score: float,
-    ) -> TrackerPredictionState:
-        """Update motion state after BigTrack accepts visual evidence."""
+    def predict(self, request: PredictorPredictInput) -> PredictorPredictOutput:
+        """Predict the next target position, velocity, and uncertainty."""
         ...
 
     @abstractmethod
-    def update_from_reject(self, state: BigTrackState) -> TrackerPredictionState:
-        """Update motion state after BigTrack rejects visual evidence."""
+    def update(self, request: PredictorUpdateInput) -> PredictorUpdateOutput:
+        """Update predictor state after BigTrack accepts or rejects matcher output."""
+        ...
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Clear predictor runtime state while keeping configuration reusable."""
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release resources held by the predictor."""
         ...
 
 
