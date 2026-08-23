@@ -1,12 +1,13 @@
 from BigTracker.types.big_track import (
     BigTrackInitializeInput,
     BigTrackInitializeOutput,
-    BigTrackStateInput,
+    BigTrackState,
     BigTrackUpdateInput,
     BigTrackUpdateOutput,
 )
 from BigTracker.types.common import Box, FrameLike, ImageLike, OutputStatus, Point, Size, TrackerMode
 from BigTracker.types.matcher import (
+    MatcherState,
     MatcherInitializeInput,
     MatcherInitializeOutput,
     MatcherMatchInput,
@@ -17,6 +18,7 @@ from BigTracker.types.matcher import (
     MatcherUpdateOutput,
 )
 from BigTracker.types.predictor import (
+    TrackerPredictionState,
     PredictorInitializeInput,
     PredictorInitializeOutput,
     PredictorPredictInput,
@@ -29,12 +31,13 @@ from BigTracker.types.predictor import (
 __all__ = [
     "BigTrackInitializeInput",
     "BigTrackInitializeOutput",
-    "BigTrackStateInput",
+    "BigTrackState",
     "BigTrackUpdateInput",
     "BigTrackUpdateOutput",
     "Box",
     "FrameLike",
     "ImageLike",
+    "MatcherState",
     "MatcherInitializeInput",
     "MatcherInitializeOutput",
     "MatcherMatchInput",
@@ -45,6 +48,7 @@ __all__ = [
     "MatcherUpdateOutput",
     "OutputStatus",
     "Point",
+    "TrackerPredictionState",
     "PredictorInitializeInput",
     "PredictorInitializeOutput",
     "PredictorPredictInput",
