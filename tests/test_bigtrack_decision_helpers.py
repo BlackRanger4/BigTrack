@@ -3,17 +3,14 @@ from __future__ import annotations
 import unittest
 
 from BigTracker.big_trackers._decision import (
+    SearchCandidate,
     box_center_distance_ratio,
     box_size_change_ratio,
     boxes_agree,
     clamp01,
-    combine_evidence_score,
-    evidence_reject_reasons,
     normalize_predictor_score,
     score_band,
-    select_best_match,
 )
-from BigTracker.state import MatchEvidence, SearchCandidate
 
 
 class BigTrackDecisionHelperTest(unittest.TestCase):
@@ -47,90 +44,17 @@ class BigTrackDecisionHelperTest(unittest.TestCase):
         self.assertFalse(boxes_agree(predicted, far, max_center_error=0.2, max_size_error=0.11))
         self.assertFalse(boxes_agree(predicted, wrong_size, max_center_error=0.5, max_size_error=0.1))
 
-    def test_combine_evidence_penalizes_ambiguity_occlusion_and_clipping(self) -> None:
-        clean = _match("a", match_score=0.9)
-        ambiguous = _match("b", match_score=0.9, ambiguity_score=0.8)
-        clipped = _match("c", match_score=0.9, is_clipped=True)
-
-        clean_score = combine_evidence_score(clean)
-
-        self.assertGreater(clean_score, combine_evidence_score(ambiguous))
-        self.assertGreater(clean_score, combine_evidence_score(clipped))
-
-    def test_reject_reasons_report_failed_thresholds(self) -> None:
-        reasons = evidence_reject_reasons(
-            _match(
-                "a",
-                match_score=0.2,
-                ambiguity_score=0.8,
-                scale_score=0.4,
-                occlusion_score=0.7,
-                is_clipped=True,
-            ),
-            min_match_score=0.5,
-            max_ambiguity_score=0.3,
-            min_scale_score=0.6,
-            max_occlusion_score=0.5,
-            allow_clipped=False,
+    def test_search_candidate_is_bigtrack_local_context(self) -> None:
+        candidate = SearchCandidate(
+            candidate_id="predicted",
+            search_center=(10.0, 10.0),
+            prediction_confidence=0.8,
+            motion_uncertainty=0.2,
+            reason="unit_test",
         )
 
-        self.assertEqual(
-            reasons,
-            ("low_match_score", "high_ambiguity", "bad_scale", "high_occlusion", "clipped"),
-        )
-
-    def test_select_best_match_preserves_candidate_context(self) -> None:
-        candidates = (
-            _candidate("weak", confidence=0.1),
-            _candidate("strong", confidence=0.9),
-        )
-        matches = (
-            _match("weak", match_score=0.4),
-            _match("strong", match_score=0.8),
-        )
-
-        choice = select_best_match(candidates, matches)
-
-        self.assertIsNotNone(choice)
-        self.assertEqual(choice.match.candidate_id, "strong")
-        self.assertEqual(choice.candidate.candidate_id, "strong")
-        self.assertEqual(choice.metadata["candidate_metadata"]["source"], "test")
-
-
-def _candidate(candidate_id: str, confidence: float) -> SearchCandidate:
-    return SearchCandidate(
-        candidate_id=candidate_id,
-        search_center=(10.0, 10.0),
-        predicted_target_size=(20.0, 20.0),
-        prediction_confidence=confidence,
-        motion_uncertainty=0.0,
-        reason="unit_test",
-        metadata={"source": "test"},
-    )
-
-
-def _match(
-    candidate_id: str,
-    *,
-    match_score: float,
-    ambiguity_score: float = 0.0,
-    scale_score: float = 1.0,
-    occlusion_score: float = 0.0,
-    is_clipped: bool = False,
-) -> MatchEvidence:
-    return MatchEvidence(
-        candidate_id=candidate_id,
-        box=(10.0, 10.0, 20.0, 20.0),
-        match_score=match_score,
-        identity_score=1.0,
-        appearance_score=match_score,
-        localization_score=match_score,
-        ambiguity_score=ambiguity_score,
-        scale_score=scale_score,
-        occlusion_score=occlusion_score,
-        is_clipped=is_clipped,
-        metadata={"match": candidate_id},
-    )
+        self.assertEqual(candidate.search_center, (10.0, 10.0))
+        self.assertEqual(candidate.reason, "unit_test")
 
 
 if __name__ == "__main__":

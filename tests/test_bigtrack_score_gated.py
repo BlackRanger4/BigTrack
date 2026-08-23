@@ -4,8 +4,20 @@ from dataclasses import dataclass, replace
 import unittest
 
 from BigTracker.big_trackers.score_gated import ScoreGatedBigTrack, ScoreGatedBigTrackConfig
-from BigTracker.state import MatchEvidence, MatcherState, SearchCandidate, TemplateCandidate
-from BigTracker.types import OutputStatus, TrackerMode
+from BigTracker.types import (
+    BigTrackInitializeInput,
+    BigTrackUpdateInput,
+    MatcherInitializeOutput,
+    MatcherMatchOutput,
+    MatcherState,
+    MatcherTemplateOutput,
+    MatcherUpdateOutput,
+    OutputStatus,
+    PredictorInitializeOutput,
+    PredictorPredictOutput,
+    PredictorUpdateOutput,
+    TrackerMode,
+)
 
 
 @dataclass(frozen=True)
@@ -21,90 +33,91 @@ class _Template:
 
 
 class _FakePredictor:
-    def predict(self, state, frame):
-        return state.prediction
+    def __init__(self) -> None:
+        self.state = None
 
-    def update_from_accept(self, state, accepted_pos, accepted_size, score):
-        return replace(
-            state.prediction,
-            target_pos=accepted_pos,
-            target_size=accepted_size,
-            last_score=score,
-            uncertainty=0.0,
-        )
+    def initialize(self, request):
+        self.state = request.predictor_state
+        return PredictorInitializeOutput(ok=True)
 
-    def update_from_reject(self, state):
-        return replace(
-            state.prediction,
-            last_score=0.0,
-            uncertainty=state.prediction.uncertainty + 1.0,
-        )
+    def predict(self, request):
+        return PredictorPredictOutput(predictor_state=self.state)
+
+    def update(self, request):
+        if request.accepted:
+            self.state = replace(request.predictor_state, uncertainty=0.0)
+        else:
+            self.state = replace(request.predictor_state, uncertainty=request.predictor_state.uncertainty + 1.0)
+        return PredictorUpdateOutput(ok=True)
+
+    def reset(self):
+        self.state = None
+
+    def close(self):
+        self.reset()
 
 
 class _FakeMatcher:
-    def __init__(self, matches: list[MatchEvidence]) -> None:
+    def __init__(self, matches: list[tuple[tuple[float, float, float, float], float]]) -> None:
         self.matches = matches
-        self.template_updates: list[TemplateCandidate] = []
+        self._state = None
+        self.template_updates: list[_Template] = []
 
-    def initialize_template(self, frame, target_pos, target_size):
+    def initialize_template(self, request):
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(ok=True)
         template = _Template("init")
-        return MatcherState(init_template=template, adaptive_template=template)
+        self._state = MatcherState(init_template=template, adaptive_template=template)
+        return MatcherInitializeOutput(ok=True)
 
-    def match(self, frame, matcher_state, candidate: SearchCandidate, mode: TrackerMode):
+    def match(self, request):
         if not self.matches:
             raise AssertionError("Fake matcher has no queued match")
-        match = self.matches.pop(0)
-        return replace(match, candidate_id=candidate.candidate_id)
+        box, score = self.matches.pop(0)
+        return MatcherMatchOutput(bboxes=[box], scores=[score])
 
-    def extract_template(self, frame, target_pos, target_size, previous_state):
-        return TemplateCandidate(
-            template=_Template(f"template-{frame.idx}"),
-            source_frame_idx=frame.idx,
-            source_box=(
-                target_pos[0] - target_size[0] / 2.0,
-                target_pos[1] - target_size[1] / 2.0,
-                target_size[0],
-                target_size[1],
-            ),
-            quality_score=1.0,
-            identity_score=1.0,
-        )
+    def extract_template(self, request):
+        template = _Template(f"template-{request.frame.idx}")
+        return MatcherTemplateOutput(template=template, score=1.0)
 
-    def update_templates(self, state, template):
-        self.template_updates.append(template)
-        return replace(
-            state,
-            best_templates=tuple(state.best_templates) + (template.template,),
-            adaptive_template=template.template,
-        )
+    def update_templates(self, request):
+        self.template_updates.append(request.template)
+        self._state = replace(self._state, adaptive_template=request.template)
+        return MatcherUpdateOutput(ok=True)
+
+    def reset(self):
+        self._state = None
+
+    def close(self):
+        self.reset()
 
 
 class ScoreGatedBigTrackTest(unittest.TestCase):
     def test_good_match_accepts_and_updates_template_on_interval(self) -> None:
         matcher = _FakeMatcher(
             [
-                _match(score=0.9, box=(10.0, 10.0, 20.0, 20.0)),
-                _match(score=0.9, box=(10.0, 10.0, 20.0, 20.0)),
+                ((10.0, 10.0, 20.0, 20.0), 0.9),
+                ((10.0, 10.0, 20.0, 20.0), 0.9),
             ]
         )
         tracker = _tracker(matcher, template_update_interval=2)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        first = tracker.update(_frame(1))
-        second = tracker.update(_frame(2))
+        first = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
+        second = tracker.update(BigTrackUpdateInput(frame=_frame(2)))
 
         self.assertEqual(first.status, OutputStatus.ACTIVE)
         self.assertEqual(second.status, OutputStatus.ACTIVE)
         self.assertEqual(len(matcher.template_updates), 1)
-        self.assertEqual(matcher.template_updates[0].source_frame_idx, 2)
-        self.assertAlmostEqual(matcher.template_updates[0].quality_score, 0.9)
+        self.assertEqual(matcher.template_updates[0].name, "template-2")
 
     def test_weak_match_near_prediction_accepts_without_template_update(self) -> None:
-        matcher = _FakeMatcher([_match(score=0.5, box=(11.0, 10.0, 20.0, 20.0))])
+        matcher = _FakeMatcher([((11.0, 10.0, 20.0, 20.0), 0.5)])
         tracker = _tracker(matcher, template_update_interval=1)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        output = tracker.update(_frame(1))
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
         state = tracker.get_state()
 
         self.assertEqual(output.status, OutputStatus.ACTIVE)
@@ -113,47 +126,47 @@ class ScoreGatedBigTrackTest(unittest.TestCase):
         self.assertEqual(matcher.template_updates, [])
 
     def test_weak_match_far_from_prediction_uses_predictor_and_becomes_uncertain(self) -> None:
-        matcher = _FakeMatcher([_match(score=0.5, box=(80.0, 80.0, 20.0, 20.0))])
+        matcher = _FakeMatcher([((80.0, 80.0, 20.0, 20.0), 0.5)])
         tracker = _tracker(matcher)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        output = tracker.update(_frame(1))
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
         state = tracker.get_state()
 
         self.assertEqual(output.status, OutputStatus.UNCERTAIN)
         self.assertEqual(output.box, (10.0, 10.0, 20.0, 20.0))
         self.assertEqual(state.mode, TrackerMode.UNCERTAIN)
-        self.assertEqual(state.counters.uncertain_count, 1)
+        self.assertEqual(state.metadata["score_gated_counters"].uncertain_count, 1)
         self.assertEqual(matcher.template_updates, [])
 
     def test_bad_match_uses_predictor_and_enters_occluded(self) -> None:
-        matcher = _FakeMatcher([_match(score=0.1, box=(10.0, 10.0, 20.0, 20.0))])
+        matcher = _FakeMatcher([((10.0, 10.0, 20.0, 20.0), 0.1)])
         tracker = _tracker(matcher)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        output = tracker.update(_frame(1))
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
         state = tracker.get_state()
 
         self.assertEqual(output.status, OutputStatus.OCCLUDED)
         self.assertEqual(output.box, (10.0, 10.0, 20.0, 20.0))
         self.assertEqual(state.mode, TrackerMode.OCCLUDED)
-        self.assertEqual(state.counters.lost_count, 1)
+        self.assertEqual(state.metadata["score_gated_counters"].lost_count, 1)
         self.assertEqual(matcher.template_updates, [])
 
     def test_repeated_rejects_enter_recovery_then_lost(self) -> None:
         matcher = _FakeMatcher(
             [
-                _match(score=0.1, box=(10.0, 10.0, 20.0, 20.0)),
-                _match(score=0.1, box=(10.0, 10.0, 20.0, 20.0)),
-                _match(score=0.1, box=(10.0, 10.0, 20.0, 20.0)),
+                ((10.0, 10.0, 20.0, 20.0), 0.1),
+                ((10.0, 10.0, 20.0, 20.0), 0.1),
+                ((10.0, 10.0, 20.0, 20.0), 0.1),
             ]
         )
         tracker = _tracker(matcher, recovery_after=2, lost_after=2)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        first = tracker.update(_frame(1))
-        second = tracker.update(_frame(2))
-        third = tracker.update(_frame(3))
+        first = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
+        second = tracker.update(BigTrackUpdateInput(frame=_frame(2)))
+        third = tracker.update(BigTrackUpdateInput(frame=_frame(3)))
 
         self.assertEqual(first.status, OutputStatus.OCCLUDED)
         self.assertEqual(second.status, OutputStatus.UNCERTAIN)
@@ -164,20 +177,20 @@ class ScoreGatedBigTrackTest(unittest.TestCase):
     def test_good_match_recovers_from_uncertain_mode(self) -> None:
         matcher = _FakeMatcher(
             [
-                _match(score=0.5, box=(80.0, 80.0, 20.0, 20.0)),
-                _match(score=0.9, box=(12.0, 10.0, 20.0, 20.0)),
+                ((80.0, 80.0, 20.0, 20.0), 0.5),
+                ((12.0, 10.0, 20.0, 20.0), 0.9),
             ]
         )
         tracker = _tracker(matcher, template_update_interval=10)
-        tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
 
-        tracker.update(_frame(1))
-        output = tracker.update(_frame(2))
+        tracker.update(BigTrackUpdateInput(frame=_frame(1)))
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(2)))
         state = tracker.get_state()
 
         self.assertEqual(output.status, OutputStatus.ACTIVE)
         self.assertEqual(state.mode, TrackerMode.TRACKING)
-        self.assertEqual(state.counters.uncertain_count, 0)
+        self.assertEqual(state.metadata["score_gated_counters"].uncertain_count, 0)
 
 
 def _tracker(
@@ -205,20 +218,6 @@ def _tracker(
 
 def _frame(idx: int) -> _Frame:
     return _Frame(image=None, idx=idx, timestamp=float(idx))
-
-
-def _match(score: float, box) -> MatchEvidence:
-    return MatchEvidence(
-        candidate_id="queued",
-        box=box,
-        match_score=score,
-        identity_score=1.0,
-        appearance_score=score,
-        localization_score=score,
-        ambiguity_score=0.0,
-        scale_score=1.0,
-        occlusion_score=0.0,
-    )
 
 
 if __name__ == "__main__":

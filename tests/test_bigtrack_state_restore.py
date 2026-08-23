@@ -5,14 +5,23 @@ import unittest
 
 from BigTracker.big_trackers.score_gated import ScoreGatedBigTrack, ScoreGatedBigTrackConfig
 from BigTracker.big_trackers.simple import SimpleBigTrack
-from BigTracker.state import (
+from BigTracker.types import (
+    BigTrackInitializeInput,
     BigTrackState,
-    MatchEvidence,
+    BigTrackUpdateInput,
+    MatcherInitializeInput,
+    MatcherInitializeOutput,
+    MatcherMatchOutput,
     MatcherState,
-    SearchCandidate,
-    TemplateCandidate,
+    MatcherTemplateOutput,
+    MatcherUpdateOutput,
+    OutputStatus,
+    PredictorInitializeInput,
+    PredictorInitializeOutput,
+    PredictorPredictOutput,
+    PredictorUpdateOutput,
+    TrackerMode,
 )
-from BigTracker.types import OutputStatus, TrackerMode
 
 
 @dataclass(frozen=True)
@@ -28,98 +37,93 @@ class _Template:
 
 
 class _FakePredictor:
-    def predict(self, state, frame):
-        return state.prediction
+    def __init__(self) -> None:
+        self.state = None
 
-    def update_from_accept(self, state, accepted_pos, accepted_size, score):
-        return replace(
-            state.prediction,
-            target_pos=accepted_pos,
-            target_size=accepted_size,
-            last_score=score,
-            metadata={
-                **dict(state.prediction.metadata),
-                "predictor_accept_frame": state.output.frame_idx,
-            },
-        )
+    def initialize(self, request):
+        self.state = request.predictor_state
+        return PredictorInitializeOutput(ok=True)
 
-    def update_from_reject(self, state):
-        return replace(
-            state.prediction,
-            uncertainty=state.prediction.uncertainty + 1.0,
-        )
+    def predict(self, request):
+        return PredictorPredictOutput(predictor_state=self.state)
+
+    def update(self, request):
+        self.state = request.predictor_state
+        return PredictorUpdateOutput(ok=True)
+
+    def reset(self):
+        self.state = None
+
+    def close(self):
+        self.reset()
 
 
 class _FakeMatcher:
     def __init__(self) -> None:
         self.initialize_count = 0
         self.seen_templates: list[str] = []
+        self._state = None
 
-    def initialize_template(self, frame, target_pos, target_size):
+    def initialize_template(self, request):
+        if request.matcher_state is not None:
+            self._state = request.matcher_state
+            return MatcherInitializeOutput(ok=True)
         self.initialize_count += 1
         template = _Template(f"init-{self.initialize_count}")
-        return MatcherState(init_template=template, adaptive_template=template)
+        self._state = MatcherState(init_template=template, adaptive_template=template)
+        return MatcherInitializeOutput(ok=True)
 
-    def match(self, frame, matcher_state, candidate: SearchCandidate, mode: TrackerMode):
-        template = matcher_state.adaptive_template or matcher_state.init_template
+    def match(self, request):
+        template = self._state.adaptive_template or self._state.init_template
         self.seen_templates.append(template.name)
-        return MatchEvidence(
-            candidate_id=candidate.candidate_id,
-            box=(12.0, 10.0, 20.0, 20.0),
-            match_score=0.9,
-            identity_score=1.0,
-            appearance_score=0.9,
-            localization_score=0.9,
-            ambiguity_score=0.0,
-            scale_score=1.0,
-            occlusion_score=0.0,
-        )
+        return MatcherMatchOutput(bboxes=[(12.0, 10.0, 20.0, 20.0)], scores=[0.9])
 
-    def extract_template(self, frame, target_pos, target_size, previous_state):
-        return TemplateCandidate(
-            template=_Template(f"approved-{frame.idx}"),
-            source_frame_idx=frame.idx,
-            source_box=(
-                target_pos[0] - target_size[0] / 2.0,
-                target_pos[1] - target_size[1] / 2.0,
-                target_size[0],
-                target_size[1],
-            ),
-            quality_score=1.0,
-            identity_score=1.0,
-        )
+    def extract_template(self, request):
+        return MatcherTemplateOutput(template=_Template(f"approved-{request.frame.idx}"), score=1.0)
 
-    def update_templates(self, state, template):
-        return replace(
-            state,
-            best_templates=tuple(state.best_templates) + (template.template,),
-            adaptive_template=template.template,
-        )
+    def update_templates(self, request):
+        self._state = replace(self._state, adaptive_template=request.template)
+        return MatcherUpdateOutput(ok=True)
+
+    def reset(self):
+        self._state = None
+
+    def close(self):
+        self.reset()
 
 
 class BigTrackStateRestoreTest(unittest.TestCase):
-    def test_simple_bigtrack_restores_state_without_reinitializing_matcher(self) -> None:
+    def test_simple_bigtrack_restores_state_without_reinitializing_matcher_template(self) -> None:
         matcher = _FakeMatcher()
         tracker = SimpleBigTrack(predictor=_FakePredictor(), matcher=matcher)
-        initial_state = tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
-        restored_state = replace(
-            initial_state,
-            matcher=replace(
-                initial_state.matcher,
-                adaptive_template=_Template("restored-adaptive"),
-            ),
-            metadata={"saved": True},
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
+        initial_state = tracker.get_state()
+        restored_matcher = replace(
+            initial_state.matcher_state,
+            adaptive_template=_Template("restored-adaptive"),
         )
 
         tracker.reset()
-        returned_state = tracker.initialize_from_state(restored_state)
-        output = tracker.update(_frame(1))
+        result = tracker.initialize_from_state(
+            BigTrackInitializeInput(
+                frame=_frame(0),
+                box=(10.0, 10.0, 20.0, 20.0),
+                predictor=PredictorInitializeInput(predictor_state=initial_state.predictor_state),
+                matcher=MatcherInitializeInput(
+                    frame=_frame(0),
+                    box=(10.0, 10.0, 20.0, 20.0),
+                    matcher_state=restored_matcher,
+                ),
+                metadata={"saved": True},
+            )
+        )
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(1)))
 
-        self.assertIs(returned_state, restored_state)
+        self.assertTrue(result.ok)
         self.assertEqual(matcher.initialize_count, 1)
         self.assertEqual(matcher.seen_templates, ["restored-adaptive"])
         self.assertEqual(output.status, OutputStatus.ACTIVE)
-        self.assertEqual(tracker.get_state().metadata, {"saved": True})
+        self.assertEqual(tracker.get_state().metadata["saved"], True)
 
     def test_score_gated_bigtrack_restores_state_and_policy_counters(self) -> None:
         matcher = _FakeMatcher()
@@ -132,26 +136,41 @@ class BigTrackStateRestoreTest(unittest.TestCase):
                 template_update_interval=100,
             ),
         )
-        state = tracker.initialize(_frame(0), (10.0, 10.0, 20.0, 20.0))
-        tracker.update(_frame(1))
+        tracker.initialize(BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0)))
+        tracker.update(BigTrackUpdateInput(frame=_frame(1)))
         saved_state = tracker.get_state()
+        saved_age = saved_state.metadata["score_gated_counters"].age
 
         tracker.reset()
-        tracker.initialize_from_state(saved_state)
-        output = tracker.update(_frame(2))
+        tracker.initialize_from_state(
+            BigTrackInitializeInput(
+                frame=_frame(1),
+                box=saved_state.output.box,
+                predictor=PredictorInitializeInput(predictor_state=saved_state.predictor_state),
+                matcher=MatcherInitializeInput(
+                    frame=_frame(1),
+                    box=saved_state.output.box,
+                    matcher_state=saved_state.matcher_state,
+                ),
+                metadata=saved_state.metadata,
+            )
+        )
+        output = tracker.update(BigTrackUpdateInput(frame=_frame(2)))
         restored = tracker.get_state()
 
         self.assertIsInstance(restored, BigTrackState)
         self.assertEqual(matcher.initialize_count, 1)
         self.assertEqual(output.status, OutputStatus.ACTIVE)
         self.assertEqual(restored.mode, TrackerMode.TRACKING)
-        self.assertEqual(restored.counters.age, saved_state.counters.age + 1)
+        self.assertEqual(restored.metadata["score_gated_counters"].age, saved_age + 1)
 
-    def test_initialize_from_state_rejects_wrong_type(self) -> None:
+    def test_initialize_from_state_requires_predictor_and_matcher_inputs(self) -> None:
         tracker = SimpleBigTrack(predictor=_FakePredictor(), matcher=_FakeMatcher())
 
-        with self.assertRaises(TypeError):
-            tracker.initialize_from_state(object())
+        with self.assertRaises(ValueError):
+            tracker.initialize_from_state(
+                BigTrackInitializeInput(frame=_frame(0), box=(10.0, 10.0, 20.0, 20.0))
+            )
 
 
 def _frame(idx: int) -> _Frame:
