@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Optional, Sequence
 
 from BigTracker.big_track import BigTrack
@@ -28,6 +28,24 @@ from BigTracker.types import (
 )
 
 
+@dataclass(frozen=True)
+class BigTrackDebugSnapshot:
+    """Last BigTrack flow values exposed for visualization tools."""
+
+    frame_idx: int
+    timestamp: float
+    predictor_target_pos: Point
+    predictor_target_velocity: Point
+    candidate_target_poses: tuple[Point, ...]
+    matcher_bboxes: tuple[Box, ...]
+    matcher_scores: tuple[float, ...]
+    accepted_box: Optional[Box]
+    accepted_target_pos: Optional[Point]
+    decision_reason: str
+    mode: TrackerMode
+    output: BigTrackUpdateOutput
+
+
 class BaseBigTrack(BigTrack):
     """Reusable BigTrack flow without candidate or lifecycle policy."""
 
@@ -36,6 +54,7 @@ class BaseBigTrack(BigTrack):
         self.matcher = matcher
         self._state: Optional[BigTrackState] = None
         self._output: Optional[BigTrackUpdateOutput] = None
+        self._last_debug: Optional[BigTrackDebugSnapshot] = None
 
     def initialize(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
         target_pos = _box_to_center(request.box)
@@ -146,11 +165,26 @@ class BaseBigTrack(BigTrack):
 
         self._state = next_state
         self._output = next_state.output
+        self._last_debug = BigTrackDebugSnapshot(
+            frame_idx=request.frame.idx,
+            timestamp=request.frame.timestamp,
+            predictor_target_pos=prediction.target_pos,
+            predictor_target_velocity=prediction.target_velocity,
+            candidate_target_poses=tuple(candidate.search_center for candidate in candidates),
+            matcher_bboxes=tuple(match_output.bboxes),
+            matcher_scores=tuple(float(score) for score in match_output.scores),
+            accepted_box=decision.accepted_box,
+            accepted_target_pos=decision.accepted_target_pos,
+            decision_reason=decision.reason,
+            mode=decision.next_mode,
+            output=next_state.output,
+        )
         return next_state.output
 
     def reset(self) -> None:
         self._state = None
         self._output = None
+        self._last_debug = None
         self.predictor.reset()
         self.matcher.reset()
 
@@ -164,6 +198,9 @@ class BaseBigTrack(BigTrack):
 
     def get_output(self) -> Optional[BigTrackUpdateOutput]:
         return self._output
+
+    def get_debug_snapshot(self) -> Optional[BigTrackDebugSnapshot]:
+        return self._last_debug
 
     def make_candidates(
         self,

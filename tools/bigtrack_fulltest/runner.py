@@ -30,8 +30,13 @@ class RunnerConfig:
     """Interactive full-test runtime settings."""
 
     window_name: str = "BigTracker"
+    debug_window_name: str = "BigTracker debug"
     window_width: int = 1280
     window_height: int = 720
+    debug_width: int = 1280
+    debug_height: int = 720
+    show_debug_window: bool = True
+    debug_history_length: int = 40
     start_paused: bool = True
     continuous: bool = False
     frame_delay_ms: int = 1
@@ -132,6 +137,8 @@ class FullTestRunner:
         self.config = config
         self.timing = TimingStats(max_samples=config.max_timing_samples)
         self.frame_view = ViewState()
+        self.debug_view = ViewState()
+        self.debug_history: Deque[object] = deque(maxlen=max(1, int(config.debug_history_length)))
         self.paused = config.start_paused
         self.continuous = config.continuous
         self.current_frame: Optional[Frame] = None
@@ -146,6 +153,10 @@ class FullTestRunner:
         cv2.namedWindow(self.config.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.config.window_name, self.config.window_width, self.config.window_height)
         cv2.setMouseCallback(self.config.window_name, self._on_frame_mouse)
+        if self.config.show_debug_window:
+            cv2.namedWindow(self.config.debug_window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.config.debug_window_name, self.config.debug_width, self.config.debug_height)
+            cv2.setMouseCallback(self.config.debug_window_name, self._on_debug_mouse)
         self._print_controls()
 
         try:
@@ -157,6 +168,8 @@ class FullTestRunner:
 
                 if self.current_frame is not None:
                     cv2.imshow(self.config.window_name, self._render_frame(self.current_frame))
+                    if self.config.show_debug_window:
+                        cv2.imshow(self.config.debug_window_name, self._render_debug_frame(self.current_frame))
 
                 key = cv2.waitKey(self.config.frame_delay_ms) & 0xFF
                 self._handle_key(key)
@@ -165,6 +178,8 @@ class FullTestRunner:
                 self.log_writer.close()
             self.source.close()
             cv2.destroyWindow(self.config.window_name)
+            if self.config.show_debug_window:
+                cv2.destroyWindow(self.config.debug_window_name)
 
     def _advance_one_frame(self) -> bool:
         frame = self.source.read()
@@ -179,6 +194,7 @@ class FullTestRunner:
             self.latest_output = self.tracker.update(BigTrackUpdateInput(frame=frame))
             update_ms = (time.perf_counter() - start) * 1000.0
             self.timing.record_update_ms(update_ms)
+            self._capture_debug_snapshot()
             self._log_frame(frame, update_ms)
         return True
 
@@ -215,6 +231,7 @@ class FullTestRunner:
             self.frame_view.zoom_at(self.config.window_width // 2, self.config.window_height // 2, 0.8)
         elif key == ord("0"):
             self.frame_view.reset()
+            self.debug_view.reset()
 
     def _initialize_tracker_from_roi(self) -> None:
         if self.current_frame is None:
@@ -235,6 +252,7 @@ class FullTestRunner:
         box = _display_box_to_image_box((float(x), float(y), float(width), float(height)), self.frame_view)
         self.tracker.initialize(BigTrackInitializeInput(frame=self.current_frame, box=box))
         self.latest_output = self.tracker.get_output()
+        self.debug_history.clear()
         self.timing.reset_frame_clock(clear_samples=True)
         self._log_event("initialize", self.current_frame)
 
@@ -260,6 +278,7 @@ class FullTestRunner:
             )
         )
         self.latest_output = self.tracker.get_output()
+        self.debug_history.clear()
         self.timing.reset_frame_clock(clear_samples=True)
         self._log_event("restore", self.current_frame)
 
@@ -278,6 +297,17 @@ class FullTestRunner:
                 display=display,
                 lines=self._general_lines(frame),
             )
+        return display
+
+    def _render_debug_frame(self, frame: Frame):
+        image = frame.image.copy()
+        self._draw_debug_history(image)
+        display = _apply_zoom(
+            image,
+            self.debug_view,
+            display_size=(self.config.debug_width, self.config.debug_height),
+        )
+        _draw_overlay(display, self._debug_lines(frame))
         return display
 
     def _general_lines(self, frame: Frame) -> list[str]:
@@ -307,6 +337,9 @@ class FullTestRunner:
     def _on_frame_mouse(self, event: int, x: int, y: int, flags: int, param: object) -> None:
         self._handle_view_mouse(self.frame_view, event, x, y, flags)
 
+    def _on_debug_mouse(self, event: int, x: int, y: int, flags: int, param: object) -> None:
+        self._handle_view_mouse(self.debug_view, event, x, y, flags)
+
     def _handle_view_mouse(self, view: ViewState, event: int, x: int, y: int, flags: int) -> None:
         cv2 = _require_cv2()
         if event == cv2.EVENT_MOUSEWHEEL:
@@ -323,6 +356,60 @@ class FullTestRunner:
             return self.tracker.get_state()
         except RuntimeError:
             return None
+
+    def _capture_debug_snapshot(self) -> None:
+        getter = getattr(self.tracker, "get_debug_snapshot", None)
+        if getter is None:
+            return
+        snapshot = getter()
+        if snapshot is not None:
+            self.debug_history.append(snapshot)
+
+    def _draw_debug_history(self, image) -> None:
+        if not self.debug_history:
+            return
+
+        count = len(self.debug_history)
+        for index, snapshot in enumerate(self.debug_history):
+            alpha = 0.15 + 0.85 * float(index + 1) / float(count)
+            current = index == count - 1
+            thickness = 2 if current else 1
+            for bbox_index, bbox in enumerate(getattr(snapshot, "matcher_bboxes", ())):
+                score = _score_at(getattr(snapshot, "matcher_scores", ()), bbox_index)
+                matched_center = _box_center(bbox)
+                predictor_pos = getattr(snapshot, "predictor_target_pos", None)
+                _draw_box_alpha(image, bbox, (40, 180, 255), alpha, thickness)
+                _draw_point_alpha(image, matched_center, (40, 180, 255), alpha, 3 if current else 2)
+                if predictor_pos is not None:
+                    _draw_line_alpha(image, predictor_pos, matched_center, (255, 190, 40), alpha * 0.75, thickness)
+                if current:
+                    _draw_label(image, f"m{bbox_index} {score:.2f}", matched_center, (40, 180, 255))
+
+            predictor_pos = getattr(snapshot, "predictor_target_pos", None)
+            if predictor_pos is not None:
+                _draw_point_alpha(image, predictor_pos, (255, 80, 80), alpha, 4 if current else 2)
+
+            accepted_box = getattr(snapshot, "accepted_box", None)
+            if accepted_box is not None:
+                _draw_box_alpha(image, accepted_box, (80, 255, 80), alpha, 2 if current else 1)
+
+    def _debug_lines(self, frame: Frame) -> list[str]:
+        snapshot = self.debug_history[-1] if self.debug_history else None
+        lines = [
+            f"debug frame={frame.idx} history={len(self.debug_history)}",
+            "red=predictor center  orange=prediction-to-match  cyan=matcher bbox/center  green=accepted output",
+        ]
+        if snapshot is not None:
+            lines.append(
+                "pred={pred} vel={vel} matches={count} scores={scores} reason={reason}".format(
+                    pred=_fmt_pair(getattr(snapshot, "predictor_target_pos")),
+                    vel=_fmt_pair(getattr(snapshot, "predictor_target_velocity")),
+                    count=len(getattr(snapshot, "matcher_bboxes", ())),
+                    scores=", ".join(f"{float(score):.2f}" for score in getattr(snapshot, "matcher_scores", ())),
+                    reason=getattr(snapshot, "decision_reason", ""),
+                )
+            )
+        return lines
 
     def _log_frame(self, frame: Frame, update_ms: float) -> None:
         if self.log_writer is None:
@@ -446,6 +533,73 @@ def _draw_box(image, box: Box, color: Tuple[int, int, int], thickness: int) -> N
     p1 = (int(round(x)), int(round(y)))
     p2 = (int(round(x + width)), int(round(y + height)))
     cv2.rectangle(image, p1, p2, color, thickness)
+
+
+def _draw_box_alpha(image, box: Box, color: Tuple[int, int, int], alpha: float, thickness: int) -> None:
+    cv2 = _require_cv2()
+    overlay = image.copy()
+    _draw_box(overlay, box, color=color, thickness=thickness)
+    cv2.addWeighted(overlay, _clamp_alpha(alpha), image, 1.0 - _clamp_alpha(alpha), 0.0, image)
+
+
+def _draw_point_alpha(
+    image,
+    point: Tuple[float, float],
+    color: Tuple[int, int, int],
+    alpha: float,
+    radius: int,
+) -> None:
+    cv2 = _require_cv2()
+    overlay = image.copy()
+    cv2.circle(overlay, _point_int(point), int(radius), color, thickness=-1, lineType=cv2.LINE_AA)
+    cv2.addWeighted(overlay, _clamp_alpha(alpha), image, 1.0 - _clamp_alpha(alpha), 0.0, image)
+
+
+def _draw_line_alpha(
+    image,
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    color: Tuple[int, int, int],
+    alpha: float,
+    thickness: int,
+) -> None:
+    cv2 = _require_cv2()
+    overlay = image.copy()
+    cv2.line(overlay, _point_int(p1), _point_int(p2), color, thickness=thickness, lineType=cv2.LINE_AA)
+    cv2.addWeighted(overlay, _clamp_alpha(alpha), image, 1.0 - _clamp_alpha(alpha), 0.0, image)
+
+
+def _draw_label(image, text: str, point: Tuple[float, float], color: Tuple[int, int, int]) -> None:
+    cv2 = _require_cv2()
+    x, y = _point_int(point)
+    cv2.putText(
+        image,
+        text,
+        (x + 8, y - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def _point_int(point: Tuple[float, float]) -> Tuple[int, int]:
+    return (int(round(float(point[0]))), int(round(float(point[1]))))
+
+
+def _box_center(box: Box) -> Tuple[float, float]:
+    return (float(box[0]) + float(box[2]) / 2.0, float(box[1]) + float(box[3]) / 2.0)
+
+
+def _score_at(scores: Tuple[float, ...], index: int) -> float:
+    if index < 0 or index >= len(scores):
+        return 0.0
+    return float(scores[index])
+
+
+def _clamp_alpha(alpha: float) -> float:
+    return max(0.0, min(1.0, float(alpha)))
 
 
 def _frame_log_record(frame: Frame) -> dict[str, object]:
