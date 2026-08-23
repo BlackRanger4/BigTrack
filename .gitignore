@@ -8,3 +8,4 @@ dist/
 .pytest_cache/
 pytest-cache-files-*/
 .pkg-check/
+logs/

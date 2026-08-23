@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
+import enum
+import json
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Deque, Optional, Tuple
 
 from BigTracker.big_track import BigTrack
@@ -13,8 +17,10 @@ from BigTracker.types import (
     BigTrackUpdateOutput,
     Box,
     MatcherInitializeInput,
+    MatcherState,
     PredictorInitializeInput,
 )
+from BigTracker.types.matcher import TemplateState
 
 from tools.bigtrack_fulltest.frame_source import Frame, FrameSource
 
@@ -32,6 +38,8 @@ class RunnerConfig:
     draw_tracker_box: bool = True
     draw_key_help: bool = True
     max_timing_samples: int = 300
+    log_jsonl: bool = False
+    log_path: str = "logs/bigtrack_fulltest.jsonl"
 
 
 @dataclass
@@ -129,6 +137,7 @@ class FullTestRunner:
         self.current_frame: Optional[Frame] = None
         self.latest_output: Optional[BigTrackUpdateOutput] = None
         self.saved_state: Optional[BigTrackState] = None
+        self.log_writer = JsonlStateLogger(config.log_path) if config.log_jsonl else None
         self.frame_step_requested = False
         self.quit_requested = False
 
@@ -152,6 +161,8 @@ class FullTestRunner:
                 key = cv2.waitKey(self.config.frame_delay_ms) & 0xFF
                 self._handle_key(key)
         finally:
+            if self.log_writer is not None:
+                self.log_writer.close()
             self.source.close()
             cv2.destroyWindow(self.config.window_name)
 
@@ -166,7 +177,9 @@ class FullTestRunner:
         if self._current_state() is not None:
             start = time.perf_counter()
             self.latest_output = self.tracker.update(BigTrackUpdateInput(frame=frame))
-            self.timing.record_update_ms((time.perf_counter() - start) * 1000.0)
+            update_ms = (time.perf_counter() - start) * 1000.0
+            self.timing.record_update_ms(update_ms)
+            self._log_frame(frame, update_ms)
         return True
 
     def _handle_key(self, key: int) -> None:
@@ -223,6 +236,7 @@ class FullTestRunner:
         self.tracker.initialize(BigTrackInitializeInput(frame=self.current_frame, box=box))
         self.latest_output = self.tracker.get_output()
         self.timing.reset_frame_clock(clear_samples=True)
+        self._log_event("initialize", self.current_frame)
 
     def _initialize_tracker_from_saved_state(self) -> None:
         if self.saved_state is None or self.current_frame is None:
@@ -247,6 +261,7 @@ class FullTestRunner:
         )
         self.latest_output = self.tracker.get_output()
         self.timing.reset_frame_clock(clear_samples=True)
+        self._log_event("restore", self.current_frame)
 
     def _render_frame(self, frame: Frame, draw_overlay: bool = True):
         image = frame.image.copy()
@@ -309,6 +324,35 @@ class FullTestRunner:
         except RuntimeError:
             return None
 
+    def _log_frame(self, frame: Frame, update_ms: float) -> None:
+        if self.log_writer is None:
+            return
+        state = self._current_state()
+        self.log_writer.write(
+            {
+                "event": "update",
+                "frame": _frame_log_record(frame),
+                "timing": {
+                    "update_ms": update_ms,
+                    "tracker_fps": 1000.0 / update_ms if update_ms > 0.0 else None,
+                },
+                "output": self.latest_output,
+                "state": state,
+            }
+        )
+
+    def _log_event(self, event: str, frame: Frame) -> None:
+        if self.log_writer is None:
+            return
+        self.log_writer.write(
+            {
+                "event": event,
+                "frame": _frame_log_record(frame),
+                "output": self.latest_output,
+                "state": self._current_state(),
+            }
+        )
+
     def _print_controls(self) -> None:
         print("Controls:")
         print("  space: pause/resume")
@@ -321,6 +365,23 @@ class FullTestRunner:
         print("  right drag: pan")
         print("  0: reset zoom")
         print("  q or esc: quit")
+
+
+class JsonlStateLogger:
+    """Append BigTrack state snapshots to a JSONL file."""
+
+    def __init__(self, log_path: str | None) -> None:
+        path = Path(log_path or "logs/bigtrack_fulltest.jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.handle = path.open("a", encoding="utf-8")
+
+    def write(self, record: object) -> None:
+        self.handle.write(json.dumps(_json_value(record), ensure_ascii=True, sort_keys=True) + "\n")
+        self.handle.flush()
+
+    def close(self) -> None:
+        self.handle.close()
 
 
 def _apply_zoom(image, view: ViewState, display_size: Tuple[int, int]):
@@ -385,6 +446,75 @@ def _draw_box(image, box: Box, color: Tuple[int, int, int], thickness: int) -> N
     p1 = (int(round(x)), int(round(y)))
     p2 = (int(round(x + width)), int(round(y + height)))
     cv2.rectangle(image, p1, p2, color, thickness)
+
+
+def _frame_log_record(frame: Frame) -> dict[str, object]:
+    return {
+        "idx": frame.idx,
+        "timestamp": frame.timestamp,
+        "source": frame.source,
+    }
+
+
+def _json_value(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(value, MatcherState):
+        return {
+            "init_template": _template_summary(value.init_template),
+            "best_templates": [_json_value(template_state) for template_state in value.best_templates],
+            "adaptive_template": _template_summary(value.adaptive_template),
+            "metadata": _json_value(value.metadata),
+        }
+    if isinstance(value, TemplateState):
+        return {
+            "template": _template_summary(value.template),
+            "template_score": _json_value(value.template_score),
+        }
+    if _is_matcher_template(value):
+        return _template_summary(value)
+    if dataclasses.is_dataclass(value):
+        return {
+            field.name: _json_value(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+            if field.name != "image"
+        }
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    return repr(value)
+
+
+def _is_matcher_template(value: object) -> bool:
+    return dataclasses.is_dataclass(value) and value.__class__.__name__.endswith("Template")
+
+
+def _template_summary(template: object) -> object:
+    if template is None:
+        return None
+    if not dataclasses.is_dataclass(template):
+        return {"type": template.__class__.__name__, "repr": repr(template)}
+
+    skipped_fields = {
+        "patch",
+        "spectrum",
+        "template_features",
+        "template_tensor",
+        "feature_state",
+        "box_mask_z",
+        "pad_value",
+    }
+    summary: dict[str, object] = {"type": template.__class__.__name__}
+    for field in dataclasses.fields(template):
+        if field.name in skipped_fields:
+            continue
+        summary[field.name] = _json_value(getattr(template, field.name))
+    return summary
 
 
 def _mean(values: Deque[float]) -> float:

@@ -28,7 +28,6 @@ from BigTracker.predictor_models import (  # noqa: E402
     AlphaBetaPredictorModel,
     ConstantAccelerationKalmanPredictorConfig,
     ConstantAccelerationKalmanPredictorModel,
-    ConstantAccelerationKalmanPredictorModel,
     HistoryPredictorConfig,
     KalmanPredictorConfig,
     KalmanPredictorModel,
@@ -129,6 +128,8 @@ class FullTestSetupApp:
         self.input_kind = tk.StringVar(value="video")
         self.input_path = tk.StringVar(value=r"ignores\girl_dance.mp4")
         self.folder_fps = tk.StringVar(value="30.0")
+        self.log_jsonl = tk.BooleanVar(value=False)
+        self.log_path = tk.StringVar(value="logs/bigtrack_fulltest.jsonl")
         self.config_vars: dict[str, dict[str, tk.StringVar]] = {}
 
         self.notebook = ttk.Notebook(self.root)
@@ -195,6 +196,24 @@ class FullTestSetupApp:
         ttk.Entry(source_box, textvariable=self.folder_fps, width=12).grid(row=2, column=1, sticky="w")
         source_box.columnconfigure(1, weight=1)
 
+        log_box = ttk.LabelFrame(outer, text="Logging", padding=12)
+        log_box.pack(fill="x", pady=12)
+        ttk.Label(log_box, text="JSONL path").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Entry(log_box, textvariable=self.log_path, width=88).grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Button(log_box, text="Browse", command=self._browse_log_path).grid(row=0, column=2, padx=8)
+        ttk.Checkbutton(log_box, text="Enable JSONL logging", variable=self.log_jsonl).grid(
+            row=1,
+            column=1,
+            sticky="w",
+            pady=4,
+        )
+        log_box.columnconfigure(1, weight=1)
+
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=24)
         ttk.Button(buttons, text="Back", command=lambda: self.notebook.select(self.config_tab)).pack(side="left")
@@ -225,6 +244,8 @@ class FullTestSetupApp:
 
         defaults = config_type()
         for row, field in enumerate(dataclasses.fields(config_type)):
+            if key == "runner" and field.name in {"log_jsonl", "log_path"}:
+                continue
             value = DEFAULT_OVERRIDES.get((key, field.name), getattr(defaults, field.name))
             variable = tk.StringVar(value="" if value is None else str(value))
             self.config_vars[key][field.name] = variable
@@ -243,6 +264,15 @@ class FullTestSetupApp:
         if path:
             self.input_path.set(path)
 
+    def _browse_log_path(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Choose JSONL log path",
+            defaultextension=".jsonl",
+            filetypes=(("JSON Lines", "*.jsonl"), ("All files", "*.*")),
+        )
+        if path:
+            self.log_path.set(path)
+
     def _run_tracker(self) -> None:
         try:
             predictor = self._build_component(PREDICTORS, self.predictor_name.get())
@@ -250,7 +280,11 @@ class FullTestSetupApp:
             policy_spec = POLICIES[self.policy_name.get()]
             policy_config = self._build_config(self.policy_name.get(), policy_spec.config_type)
             tracker = policy_spec.factory(policy_config, predictor=predictor, matcher=matcher)
-            runner_config = self._build_config("runner", RunnerConfig)
+            runner_config = dataclasses.replace(
+                self._build_config("runner", RunnerConfig),
+                log_jsonl=bool(self.log_jsonl.get()),
+                log_path=self.log_path.get(),
+            )
             source = build_frame_source(
                 self.input_kind.get(),
                 self.input_path.get(),
@@ -272,6 +306,8 @@ class FullTestSetupApp:
             return None
         values = {}
         for field in dataclasses.fields(config_type):
+            if key == "runner" and field.name in {"log_jsonl", "log_path"}:
+                continue
             raw = self.config_vars.get(key, {}).get(field.name)
             values[field.name] = _parse_value(raw.get() if raw is not None else "")
         return config_type(**values)
