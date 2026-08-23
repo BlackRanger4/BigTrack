@@ -1,24 +1,50 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Mapping, Optional
 
-from BigTracker.state import MatchEvidence, SearchCandidate
-from BigTracker.types import Box
+from BigTracker.types import Box, OutputStatus, Point, TrackerMode
 
 
 ScoreBand = str
 
 
 @dataclass(frozen=True)
-class MatchChoice:
-    """Selected matcher result plus the candidate that produced it."""
+class SearchCandidate:
+    """BigTrack-owned matcher request candidate."""
 
-    match: MatchEvidence
-    candidate: Optional[SearchCandidate]
-    acceptance_score: float
-    metadata: Mapping[str, object]
+    candidate_id: str
+    search_center: Point
+    prediction_confidence: float = 1.0
+    motion_uncertainty: float = 0.0
+    reason: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BigTrackDecision:
+    """Internal BigTrack policy decision for one frame."""
+
+    accepted: bool
+    accepted_box: Optional[Box]
+    accepted_target_pos: Optional[Point]
+    output_status: OutputStatus
+    next_mode: TrackerMode
+    confidence: float
+    allow_template_update: bool
+    reason: str
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BigTrackCounters:
+    """Lifecycle counters used by BigTrack policies."""
+
+    age: int = 0
+    uncertain_count: int = 0
+    lost_count: int = 0
+    recovery_count: int = 0
 
 
 def clamp01(value: object, default: float = 0.0) -> float:
@@ -104,101 +130,6 @@ def boxes_agree(
         box_center_distance_ratio(predicted_box, matched_box) <= float(max_center_error)
         and box_size_change_ratio(predicted_box, matched_box) <= float(max_size_error)
     )
-
-
-def combine_evidence_score(
-    match: MatchEvidence,
-    *,
-    match_weight: float = 0.60,
-    appearance_weight: float = 0.15,
-    localization_weight: float = 0.15,
-    identity_weight: float = 0.05,
-    scale_weight: float = 0.05,
-    ambiguity_penalty: float = 0.35,
-    occlusion_penalty: float = 0.35,
-    clipped_penalty: float = 0.20,
-) -> float:
-    """Combine common matcher evidence fields into one conservative score."""
-
-    positive = (
-        float(match_weight) * clamp01(match.match_score)
-        + float(appearance_weight) * clamp01(match.appearance_score)
-        + float(localization_weight) * clamp01(match.localization_score)
-        + float(identity_weight) * clamp01(match.identity_score)
-        + float(scale_weight) * clamp01(match.scale_score)
-    )
-    penalty = (
-        float(ambiguity_penalty) * clamp01(match.ambiguity_score)
-        + float(occlusion_penalty) * clamp01(match.occlusion_score)
-    )
-    if match.is_clipped:
-        penalty += float(clipped_penalty)
-    return clamp01(positive - penalty)
-
-
-def evidence_reject_reasons(
-    match: MatchEvidence,
-    *,
-    min_match_score: Optional[float] = None,
-    max_ambiguity_score: Optional[float] = None,
-    min_scale_score: Optional[float] = None,
-    max_occlusion_score: Optional[float] = None,
-    allow_clipped: bool = True,
-) -> tuple[str, ...]:
-    """Return policy-neutral reason labels for evidence that fails thresholds."""
-
-    reasons: list[str] = []
-    if min_match_score is not None and clamp01(match.match_score) < clamp01(min_match_score):
-        reasons.append("low_match_score")
-    if max_ambiguity_score is not None and clamp01(match.ambiguity_score) > clamp01(max_ambiguity_score):
-        reasons.append("high_ambiguity")
-    if min_scale_score is not None and clamp01(match.scale_score) < clamp01(min_scale_score):
-        reasons.append("bad_scale")
-    if max_occlusion_score is not None and clamp01(match.occlusion_score) > clamp01(max_occlusion_score):
-        reasons.append("high_occlusion")
-    if match.is_clipped and not allow_clipped:
-        reasons.append("clipped")
-    return tuple(reasons)
-
-
-def select_best_match(
-    candidates: Sequence[SearchCandidate],
-    matches: Sequence[MatchEvidence],
-    *,
-    score_fn: Callable[[MatchEvidence], float] = combine_evidence_score,
-    candidate_prior_weight: float = 0.0,
-) -> Optional[MatchChoice]:
-    """Select the highest-scored match and attach its candidate metadata."""
-
-    if not matches:
-        return None
-
-    candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
-    best_choice: Optional[MatchChoice] = None
-    best_sort_key: tuple[float, int] = (-math.inf, -1)
-
-    for index, match in enumerate(matches):
-        candidate = candidates_by_id.get(match.candidate_id)
-        score = clamp01(score_fn(match))
-        if candidate is not None and candidate_prior_weight:
-            score = clamp01(score + float(candidate_prior_weight) * clamp01(candidate.prediction_confidence))
-
-        sort_key = (score, index)
-        if sort_key > best_sort_key:
-            metadata = {
-                "candidate_id": match.candidate_id,
-                "match_metadata": dict(match.metadata),
-                "candidate_metadata": dict(candidate.metadata) if candidate is not None else {},
-            }
-            best_choice = MatchChoice(
-                match=match,
-                candidate=candidate,
-                acceptance_score=score,
-                metadata=metadata,
-            )
-            best_sort_key = sort_key
-
-    return best_choice
 
 
 def _box_center_size(box: Box) -> tuple[float, float, float, float]:

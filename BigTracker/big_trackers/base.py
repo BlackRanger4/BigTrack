@@ -1,170 +1,207 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Optional
+from typing import Optional, Sequence
 
 from BigTracker.big_track import BigTrack
+from BigTracker.big_trackers._decision import BigTrackDecision, SearchCandidate
 from BigTracker.matcher import Matcher
 from BigTracker.predictor import Predictor
-from BigTracker.state import (
-    BigTrackCounters,
+from BigTracker.types import (
+    BigTrackInitializeInput,
+    BigTrackInitializeOutput,
     BigTrackState,
-    TemplateCandidate,
+    BigTrackUpdateInput,
+    BigTrackUpdateOutput,
+    Box,
+    FrameLike,
+    MatcherInitializeInput,
+    MatcherMatchInput,
+    MatcherTemplateInput,
+    MatcherUpdateInput,
+    OutputStatus,
+    Point,
+    PredictorInitializeInput,
+    PredictorPredictInput,
+    TrackerMode,
     TrackerPredictionState,
-    TrackingOutput,
 )
-from BigTracker.types import Box, FrameLike, OutputStatus, Point, Size, TrackerMode
 
 
 class BaseBigTrack(BigTrack):
-    """Reusable BigTrack flow without candidate or lifecycle policy.
-
-    Subclasses get initialize/update/reset/getters for free and must implement
-    `make_candidates`, `decide`, and `apply_decision`.
-    """
+    """Reusable BigTrack flow without candidate or lifecycle policy."""
 
     def __init__(self, predictor: Predictor, matcher: Matcher) -> None:
-        """Create a tracker from one motion predictor and one visual matcher."""
-
         self.predictor = predictor
         self.matcher = matcher
         self._state: Optional[BigTrackState] = None
-        self._output: Optional[TrackingOutput] = None
+        self._output: Optional[BigTrackUpdateOutput] = None
 
-    def initialize(
-        self,
-        frame: FrameLike,
-        box: Box,
-        target_velocity: Optional[Point] = None,
-        target_size_velocity: Optional[Size] = None,
-        initial_confidence: float = 1.0,
-    ) -> BigTrackState:
-        """Initialize prediction state, matcher templates, mode, counters, and output."""
+    def initialize(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
+        target_pos = _box_to_center(request.box)
+        predictor_request = request.predictor or PredictorInitializeInput(
+            predictor_state=TrackerPredictionState(
+                target_pos=target_pos,
+                target_velocity=(0.0, 0.0),
+                uncertainty=0.0,
+                metadata={
+                    "frame_idx": request.frame.idx,
+                    "timestamp": request.frame.timestamp,
+                },
+            )
+        )
+        self.predictor.initialize(predictor_request)
 
-        target_pos, target_size = _box_to_center_size(box)
-        prediction = TrackerPredictionState(
-            target_pos=target_pos,
-            target_size=target_size,
-            target_velocity=target_velocity or (0.0, 0.0),
-            target_size_velocity=target_size_velocity or (0.0, 0.0),
-            last_score=float(initial_confidence),
-            uncertainty=0.0,
+        matcher_request = request.matcher or MatcherInitializeInput(
+            frame=request.frame,
+            box=request.box,
         )
-        matcher_state = self.matcher.initialize_template(
-            frame=frame,
-            target_pos=target_pos,
-            target_size=target_size,
-        )
-        output = TrackingOutput(
-            box=box,
-            frame_idx=frame.idx,
-            timestamp=frame.timestamp,
+        self.matcher.initialize_template(matcher_request)
+        matcher_state = matcher_request.matcher_state or getattr(self.matcher, "_state", None)
+        if matcher_state is None:
+            raise RuntimeError("Matcher did not expose initialized state")
+
+        output = BigTrackUpdateOutput(
+            ok=True,
+            box=request.box,
+            frame_idx=request.frame.idx,
+            timestamp=request.frame.timestamp,
             status=OutputStatus.ACTIVE,
-            confidence=float(initial_confidence),
+            confidence=float(request.initial_confidence),
         )
         self._state = BigTrackState(
-            prediction=prediction,
-            matcher=matcher_state,
-            output=output,
+            predictor_state=predictor_request.predictor_state,
+            matcher_state=matcher_state,
             mode=TrackerMode.TRACKING,
-            counters=BigTrackCounters(age=1),
-            last_seen_frame=frame.idx,
+            output=output,
+            last_seen_frame=request.frame.idx,
+            metadata={
+                **dict(request.metadata),
+                "age": 1,
+                "target_size": _box_size(request.box),
+            },
         )
         self._output = output
-        return self._state
+        return BigTrackInitializeOutput(ok=True)
 
-    def initialize_from_state(self, state: BigTrackState) -> BigTrackState:
-        """Restore prediction, matcher templates, mode, counters, and output."""
+    def initialize_from_state(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
+        if request.predictor is None or request.matcher is None:
+            raise ValueError("initialize_from_state requires predictor and matcher inputs")
+        if request.matcher.matcher_state is None:
+            raise ValueError("initialize_from_state requires matcher state")
 
-        if not isinstance(state, BigTrackState):
-            raise TypeError("initialize_from_state requires a BigTrackState")
-        self._state = state
-        self._output = state.output
-        return state
+        self.predictor.initialize(request.predictor)
+        self.matcher.initialize_template(request.matcher)
+        output = BigTrackUpdateOutput(
+            ok=True,
+            box=request.box,
+            frame_idx=request.frame.idx,
+            timestamp=request.frame.timestamp,
+            status=OutputStatus.ACTIVE,
+            confidence=float(request.initial_confidence),
+        )
+        self._state = BigTrackState(
+            predictor_state=request.predictor.predictor_state,
+            matcher_state=request.matcher.matcher_state,
+            mode=TrackerMode.TRACKING,
+            output=output,
+            last_seen_frame=request.frame.idx,
+            metadata={
+                **dict(request.metadata),
+                "age": 1,
+                "target_size": _box_size(request.box),
+            },
+        )
+        self._output = output
+        return BigTrackInitializeOutput(ok=True, metadata={"restored": True})
 
-    def update(self, frame: FrameLike) -> TrackingOutput:
-        """Process one frame through prediction, matching, decision, and state update."""
-
+    def update(self, request: BigTrackUpdateInput) -> BigTrackUpdateOutput:
         state = self._require_state()
-        prediction = self.predictor.predict(state, frame)
-        candidates = self.make_candidates(state, prediction, frame)
-        matches = tuple(
-            self.matcher.match(
-                frame=frame,
-                matcher_state=state.matcher,
-                candidate=candidate,
-                mode=state.mode,
+        prediction = self.predictor.predict(
+            PredictorPredictInput(frame=request.frame, metadata=request.metadata)
+        ).predictor_state
+        candidates = self.make_candidates(state, prediction, request.frame)
+        match_output = self.matcher.match(
+            MatcherMatchInput(
+                frame=request.frame,
+                target_poses=[candidate.search_center for candidate in candidates],
             )
-            for candidate in candidates
         )
-        decision = self.decide(
-            state=state,
-            prediction=prediction,
-            candidates=candidates,
-            matches=matches,
-        )
-        next_state = self.apply_decision(
-            state=state,
-            prediction=prediction,
-            decision=decision,
-            frame=frame,
-        )
+        decision = self.decide(state, prediction, candidates, match_output.bboxes, match_output.scores)
+        next_state = self.apply_decision(state, prediction, decision, request.frame)
 
         if decision.allow_template_update:
-            if decision.accepted_target_pos is None or decision.accepted_target_size is None:
-                raise ValueError("Template update requires accepted target position and size")
-            template = self.matcher.extract_template(
-                frame=frame,
-                target_pos=decision.accepted_target_pos,
-                target_size=decision.accepted_target_size,
-                previous_state=next_state.matcher,
+            if decision.accepted_box is None:
+                raise ValueError("Template update requires accepted box")
+            template_output = self.matcher.extract_template(
+                MatcherTemplateInput(frame=request.frame, box=decision.accepted_box)
             )
-            template = _score_template_candidate(template, decision.confidence)
-            matcher_state = self.matcher.update_templates(next_state.matcher, template)
-            next_state = replace(next_state, matcher=matcher_state)
+            self.matcher.update_templates(
+                MatcherUpdateInput(template=template_output.template, score=template_output.score)
+            )
+            next_state = replace(
+                next_state,
+                matcher_state=getattr(self.matcher, "_state", next_state.matcher_state),
+            )
 
         self._state = next_state
         self._output = next_state.output
         return next_state.output
 
     def reset(self) -> None:
-        """Clear internal state and latest output."""
-
         self._state = None
         self._output = None
+        self.predictor.reset()
+        self.matcher.reset()
 
-    def get_state(self) -> Optional[BigTrackState]:
-        """Return internal state for debugging, checkpointing, or advanced users."""
+    def close(self) -> None:
+        self.reset()
+        self.predictor.close()
+        self.matcher.close()
 
-        return self._state
+    def get_state(self) -> BigTrackState:
+        return self._require_state()
 
-    def get_output(self) -> Optional[TrackingOutput]:
-        """Return the latest small client-facing output."""
-
+    def get_output(self) -> Optional[BigTrackUpdateOutput]:
         return self._output
 
-    def _require_state(self) -> BigTrackState:
-        """Return current state or fail clearly when update is called before initialize."""
+    def make_candidates(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        frame: FrameLike,
+    ) -> Sequence[SearchCandidate]:
+        raise NotImplementedError
 
+    def decide(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        candidates: Sequence[SearchCandidate],
+        bboxes: Sequence[Box],
+        scores: Sequence[float],
+    ) -> BigTrackDecision:
+        raise NotImplementedError
+
+    def apply_decision(
+        self,
+        state: BigTrackState,
+        prediction: TrackerPredictionState,
+        decision: BigTrackDecision,
+        frame: FrameLike,
+    ) -> BigTrackState:
+        raise NotImplementedError
+
+    def _require_state(self) -> BigTrackState:
         if self._state is None:
             raise RuntimeError("BigTrack must be initialized before update")
         return self._state
 
 
-def _box_to_center_size(box: Box) -> tuple[Point, Size]:
-    """Convert frame-coordinate x, y, width, height into center point and size."""
-
+def _box_to_center(box: Box) -> Point:
     x, y, width, height = box
-    return (
-        (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0),
-        (float(width), float(height)),
-    )
+    return (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0)
 
 
-def _score_template_candidate(template: TemplateCandidate, tracking_score: float) -> TemplateCandidate:
-    """Attach accepted tracking confidence to the approved template candidate."""
-
-    return replace(
-        template,
-        quality_score=max(0.0, min(1.0, float(tracking_score))),
-    )
+def _box_size(box: Box) -> tuple[float, float]:
+    return (float(box[2]), float(box[3]))
