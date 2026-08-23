@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import unittest
 
 from BigTracker.predictor_models.alpha_beta import (
@@ -12,18 +12,14 @@ from BigTracker.predictor_models.kalman_accel import (
     ConstantAccelerationKalmanPredictorConfig,
     ConstantAccelerationKalmanPredictorModel,
 )
-from BigTracker.state import (
-    BigTrackState,
-    MatcherState,
+from BigTracker.types import (
+    PredictorInitializeInput,
+    PredictorPredictInput,
+    PredictorPredictOutput,
+    PredictorUpdateInput,
+    PredictorUpdateOutput,
     TrackerPredictionState,
-    TrackingOutput,
 )
-from BigTracker.types import OutputStatus, TrackerMode
-
-
-@dataclass(frozen=True)
-class _Image:
-    shape: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -34,118 +30,75 @@ class _Frame:
 
 
 class OptionalPredictorTest(unittest.TestCase):
-    def test_alpha_beta_clamps_frame_velocity_and_acceleration(self) -> None:
-        model = AlphaBetaPredictorModel(
+    def test_alpha_beta_clamps_velocity_and_acceleration(self) -> None:
+        model = _initialized_alpha_beta(
             AlphaBetaPredictorConfig(
                 beta_position=1.0,
                 max_position_velocity=20.0,
                 max_position_acceleration=5.0,
-                max_size_velocity=10.0,
-                max_size_acceleration=2.0,
-                clamp_to_frame=True,
-            )
-        )
-        state = _state(
+            ),
             pos=(50.0, 50.0),
-            size=(20.0, 20.0),
             velocity=(100.0, 0.0),
-            size_velocity=(50.0, 0.0),
         )
 
-        predicted = model.predict(state, _frame(1))
-        accepted = model.update_from_accept(
-            replace(state, prediction=predicted),
-            accepted_pos=(200.0, 200.0),
-            accepted_size=(200.0, 200.0),
-            score=1.0,
-        )
+        predicted = model.predict(PredictorPredictInput(frame=_frame(1))).predictor_state
+        accepted = _accept(model, (200.0, 200.0), score=1.0)
 
         self.assertEqual(predicted.target_velocity, (20.0, 0.0))
         self.assertLessEqual(accepted.target_velocity[0] - predicted.target_velocity[0], 5.0)
-        self.assertEqual(accepted.target_size, (100.0, 100.0))
-        self.assertEqual(accepted.target_pos, (50.0, 50.0))
 
     def test_history_predictor_uses_bounded_accepted_history(self) -> None:
-        model = HistoryPredictorModel(
+        model = _initialized_history(
             HistoryPredictorConfig(
                 history_length=2,
                 velocity_window=2,
                 velocity_smoothing=1.0,
-                size_velocity_smoothing=1.0,
                 max_position_velocity=20.0,
-                max_size_velocity=20.0,
-                clamp_to_frame=False,
-            )
+            ),
+            pos=(0.0, 0.0),
         )
-        state0 = _state(pos=(0.0, 0.0), size=(20.0, 20.0))
-        pred1 = model.predict(state0, _frame(1))
-        accepted1 = model.update_from_accept(
-            replace(state0, prediction=pred1),
-            accepted_pos=(10.0, 0.0),
-            accepted_size=(20.0, 20.0),
-            score=1.0,
-        )
-        state1 = _state_from_prediction(accepted1, frame_idx=1, timestamp=1.0)
-        pred2 = model.predict(state1, _frame(2))
-        accepted2 = model.update_from_accept(
-            replace(state1, prediction=pred2),
-            accepted_pos=(20.0, 0.0),
-            accepted_size=(22.0, 20.0),
-            score=1.0,
-        )
-        state2 = _state_from_prediction(accepted2, frame_idx=2, timestamp=2.0)
-        pred3 = model.predict(state2, _frame(3))
+
+        model.predict(PredictorPredictInput(frame=_frame(1)))
+        accepted1 = _accept(model, (10.0, 0.0), score=1.0)
+        self.assertEqual(accepted1.target_velocity, (0.0, 0.0))
+
+        model.predict(PredictorPredictInput(frame=_frame(2)))
+        accepted2 = _accept(model, (20.0, 0.0), score=1.0)
+        pred3 = model.predict(PredictorPredictInput(frame=_frame(3))).predictor_state
 
         self.assertEqual(accepted2.target_velocity, (10.0, 0.0))
-        self.assertEqual(accepted2.target_size_velocity, (2.0, 0.0))
         self.assertEqual(pred3.target_pos, (30.0, 0.0))
         self.assertEqual(len(accepted2.metadata["history_predictor_history"]), 2)
 
     def test_constant_accel_kalman_predicts_with_clamped_acceleration(self) -> None:
-        model = ConstantAccelerationKalmanPredictorModel(
+        model = _initialized_constant_accel(
             ConstantAccelerationKalmanPredictorConfig(
                 max_position_acceleration=5.0,
                 max_position_velocity=20.0,
-                max_size_acceleration=2.0,
-                max_size_velocity=10.0,
-                clamp_to_frame=False,
-            )
-        )
-        state = _state(
+            ),
             pos=(50.0, 50.0),
-            size=(20.0, 20.0),
             velocity=(10.0, 0.0),
-            size_velocity=(0.0, 0.0),
-            metadata={
-                "constant_accel_kalman_acceleration": (100.0, 0.0),
-                "constant_accel_kalman_size_acceleration": (100.0, 0.0),
-            },
+            metadata={"constant_accel_kalman_acceleration": (100.0, 0.0)},
         )
 
-        predicted = model.predict(state, _frame(1))
+        predicted = model.predict(PredictorPredictInput(frame=_frame(1))).predictor_state
 
         self.assertEqual(predicted.target_pos, (62.5, 50.0))
         self.assertEqual(predicted.target_velocity, (15.0, 0.0))
-        self.assertEqual(predicted.target_size, (21.0, 20.0))
-        self.assertEqual(predicted.target_size_velocity, (2.0, 0.0))
         self.assertEqual(predicted.metadata["constant_accel_kalman_acceleration"], (5.0, 0.0))
 
     def test_constant_accel_reject_damps_velocity_and_acceleration(self) -> None:
-        model = ConstantAccelerationKalmanPredictorModel(
+        model = _initialized_constant_accel(
             ConstantAccelerationKalmanPredictorConfig(
                 reject_velocity_damping=0.5,
                 reject_acceleration_damping=0.25,
-                clamp_to_frame=False,
-            )
-        )
-        state = _state(
+            ),
             pos=(50.0, 50.0),
-            size=(20.0, 20.0),
             velocity=(10.0, 0.0),
             metadata={"constant_accel_kalman_acceleration": (8.0, 0.0)},
         )
-        predicted = model.predict(state, _frame(1))
-        rejected = model.update_from_reject(replace(state, prediction=predicted))
+        predicted = model.predict(PredictorPredictInput(frame=_frame(1))).predictor_state
+        rejected = _reject(model, predicted)
 
         self.assertEqual(rejected.target_velocity, (9.0, 0.0))
         self.assertEqual(rejected.metadata["constant_accel_kalman_acceleration"], (2.0, 0.0))
@@ -153,76 +106,126 @@ class OptionalPredictorTest(unittest.TestCase):
 
     def test_predictors_share_basic_contract(self) -> None:
         predictors = (
-            AlphaBetaPredictorModel(AlphaBetaPredictorConfig(clamp_to_frame=True)),
-            HistoryPredictorModel(HistoryPredictorConfig(clamp_to_frame=True)),
-            ConstantAccelerationKalmanPredictorModel(
-                ConstantAccelerationKalmanPredictorConfig(clamp_to_frame=True)
+            _initialized_alpha_beta(AlphaBetaPredictorConfig(), pos=(50.0, 50.0), velocity=(1.0, 0.0)),
+            _initialized_history(HistoryPredictorConfig(), pos=(50.0, 50.0), velocity=(1.0, 0.0)),
+            _initialized_constant_accel(
+                ConstantAccelerationKalmanPredictorConfig(),
+                pos=(50.0, 50.0),
+                velocity=(1.0, 0.0),
             ),
         )
         for predictor in predictors:
             with self.subTest(predictor=type(predictor).__name__):
-                state = _state(pos=(50.0, 50.0), size=(20.0, 20.0), velocity=(1.0, 0.0))
-                predicted = predictor.predict(state, _frame(1))
-                accepted = predictor.update_from_accept(
-                    replace(state, prediction=predicted),
-                    accepted_pos=(52.0, 50.0),
-                    accepted_size=(21.0, 20.0),
-                    score=0.8,
+                predict_output = predictor.predict(PredictorPredictInput(frame=_frame(1)))
+                accepted_output = predictor.update(
+                    PredictorUpdateInput(
+                        accepted=True,
+                        predictor_state=TrackerPredictionState(
+                            target_pos=(52.0, 50.0),
+                            target_velocity=predict_output.predictor_state.target_velocity,
+                            uncertainty=predict_output.predictor_state.uncertainty,
+                            metadata=predict_output.predictor_state.metadata,
+                        ),
+                        metadata={"score": 0.8},
+                    )
                 )
-                rejected = predictor.update_from_reject(replace(state, prediction=predicted))
+                rejected_output = predictor.update(
+                    PredictorUpdateInput(
+                        accepted=False,
+                        predictor_state=predict_output.predictor_state,
+                    )
+                )
 
-                self.assertIsInstance(accepted, TrackerPredictionState)
-                self.assertIsInstance(rejected, TrackerPredictionState)
-                self.assertGreaterEqual(accepted.last_score, 0.0)
-                self.assertLessEqual(accepted.last_score, 1.0)
-                self.assertGreaterEqual(rejected.uncertainty, predicted.uncertainty)
+                self.assertIsInstance(predict_output, PredictorPredictOutput)
+                self.assertIsInstance(accepted_output, PredictorUpdateOutput)
+                self.assertIsInstance(rejected_output, PredictorUpdateOutput)
+                self.assertIsInstance(_current_state(predictor), TrackerPredictionState)
 
 
-def _frame(idx: int, image: object | None = None) -> _Frame:
-    return _Frame(image=image or _Image((100, 100, 3)), idx=idx, timestamp=float(idx))
+def _frame(idx: int) -> _Frame:
+    return _Frame(image=None, idx=idx, timestamp=float(idx))
 
 
-def _state(
+def _initialized_alpha_beta(
+    config: AlphaBetaPredictorConfig,
     *,
     pos: tuple[float, float],
-    size: tuple[float, float],
     velocity: tuple[float, float] = (0.0, 0.0),
-    size_velocity: tuple[float, float] = (0.0, 0.0),
-    metadata: dict | None = None,
-) -> BigTrackState:
-    prediction = TrackerPredictionState(
-        target_pos=pos,
-        target_size=size,
-        target_velocity=velocity,
-        target_size_velocity=size_velocity,
-        last_score=1.0,
-        uncertainty=0.0,
-        metadata=metadata or {},
-    )
-    return _state_from_prediction(prediction, frame_idx=0, timestamp=0.0)
+) -> AlphaBetaPredictorModel:
+    model = AlphaBetaPredictorModel(config)
+    _initialize(model, pos=pos, velocity=velocity)
+    return model
 
 
-def _state_from_prediction(
-    prediction: TrackerPredictionState,
+def _initialized_history(
+    config: HistoryPredictorConfig,
     *,
-    frame_idx: int,
-    timestamp: float,
-) -> BigTrackState:
-    pos = prediction.target_pos
-    size = prediction.target_size
-    return BigTrackState(
-        prediction=prediction,
-        matcher=MatcherState(init_template=object()),
-        output=TrackingOutput(
-            box=(pos[0] - size[0] / 2.0, pos[1] - size[1] / 2.0, size[0], size[1]),
-            frame_idx=frame_idx,
-            timestamp=timestamp,
-            status=OutputStatus.ACTIVE,
-            confidence=prediction.last_score,
-        ),
-        mode=TrackerMode.TRACKING,
-        last_seen_frame=frame_idx,
+    pos: tuple[float, float],
+    velocity: tuple[float, float] = (0.0, 0.0),
+) -> HistoryPredictorModel:
+    model = HistoryPredictorModel(config)
+    _initialize(model, pos=pos, velocity=velocity)
+    return model
+
+
+def _initialized_constant_accel(
+    config: ConstantAccelerationKalmanPredictorConfig,
+    *,
+    pos: tuple[float, float],
+    velocity: tuple[float, float] = (0.0, 0.0),
+    metadata: dict | None = None,
+) -> ConstantAccelerationKalmanPredictorModel:
+    model = ConstantAccelerationKalmanPredictorModel(config)
+    _initialize(model, pos=pos, velocity=velocity, metadata=metadata)
+    return model
+
+
+def _initialize(
+    model,
+    *,
+    pos: tuple[float, float],
+    velocity: tuple[float, float],
+    metadata: dict | None = None,
+) -> None:
+    model.initialize(
+        PredictorInitializeInput(
+            predictor_state=TrackerPredictionState(
+                target_pos=pos,
+                target_velocity=velocity,
+                uncertainty=0.0,
+                metadata=metadata or {},
+            )
+        )
     )
+
+
+def _accept(model, pos: tuple[float, float], *, score: float) -> TrackerPredictionState:
+    previous = _current_state(model)
+    model.update(
+        PredictorUpdateInput(
+            accepted=True,
+            predictor_state=TrackerPredictionState(
+                target_pos=pos,
+                target_velocity=previous.target_velocity,
+                uncertainty=previous.uncertainty,
+                metadata=previous.metadata,
+            ),
+            metadata={"score": score},
+        )
+    )
+    return _current_state(model)
+
+
+def _reject(model, prediction: TrackerPredictionState) -> TrackerPredictionState:
+    model.update(PredictorUpdateInput(accepted=False, predictor_state=prediction))
+    return _current_state(model)
+
+
+def _current_state(model) -> TrackerPredictionState:
+    state = model._state
+    if state is None:
+        raise AssertionError("predictor state was not initialized")
+    return state
 
 
 if __name__ == "__main__":

@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import unittest
 
 from BigTracker.predictor_models.kalman import KalmanPredictorConfig, KalmanPredictorModel
-from BigTracker.state import (
-    BigTrackState,
-    MatcherState,
+from BigTracker.types import (
+    PredictorInitializeInput,
+    PredictorPredictInput,
+    PredictorUpdateInput,
     TrackerPredictionState,
-    TrackingOutput,
 )
-from BigTracker.types import OutputStatus, TrackerMode
-
-
-@dataclass(frozen=True)
-class _Image:
-    shape: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -25,78 +19,88 @@ class _Frame:
     timestamp: float
 
 
-class KalmanPredictorClampTest(unittest.TestCase):
-    def test_predict_clamps_center_and_size_to_frame(self) -> None:
-        model = KalmanPredictorModel(KalmanPredictorConfig(clamp_to_frame=True))
-        state = _state(
-            pos=(95.0, 95.0),
-            size=(20.0, 20.0),
-            velocity=(20.0, 20.0),
-            size_velocity=(200.0, 200.0),
+class KalmanPredictorTest(unittest.TestCase):
+    def test_predict_uses_timestamp_delta_and_constant_velocity(self) -> None:
+        model = _initialized_model(pos=(10.0, 20.0), velocity=(3.0, -2.0))
+
+        predicted = model.predict(PredictorPredictInput(frame=_frame(2, 2.0))).predictor_state
+
+        self.assertEqual(predicted.target_pos, (16.0, 16.0))
+        self.assertEqual(predicted.target_velocity, (3.0, -2.0))
+        self.assertEqual(predicted.metadata["kalman_last_frame_idx"], 2)
+        self.assertEqual(predicted.metadata["kalman_last_timestamp"], 2.0)
+
+    def test_accept_updates_toward_measurement(self) -> None:
+        model = _initialized_model(pos=(0.0, 0.0), velocity=(0.0, 0.0))
+        predicted = model.predict(PredictorPredictInput(frame=_frame(1, 1.0))).predictor_state
+
+        model.update(
+            PredictorUpdateInput(
+                accepted=True,
+                predictor_state=TrackerPredictionState(
+                    target_pos=(10.0, 0.0),
+                    target_velocity=predicted.target_velocity,
+                    uncertainty=predicted.uncertainty,
+                    metadata=predicted.metadata,
+                ),
+                metadata={"score": 1.0},
+            )
         )
+        accepted = _current_state(model)
 
-        predicted = model.predict(state, _frame(1))
+        self.assertGreater(accepted.target_pos[0], predicted.target_pos[0])
+        self.assertLess(accepted.target_pos[0], 10.0)
+        self.assertEqual(accepted.metadata["kalman_reject_count"], 0)
 
-        self.assertEqual(predicted.target_size, (100.0, 100.0))
-        self.assertEqual(predicted.target_pos, (50.0, 50.0))
-        self.assertEqual(predicted.metadata["kalman_frame_shape"], (100.0, 100.0))
-
-    def test_accept_clamps_using_last_prediction_frame_shape(self) -> None:
-        model = KalmanPredictorModel(KalmanPredictorConfig(clamp_to_frame=True))
-        state = _state(pos=(50.0, 50.0), size=(20.0, 20.0))
-        predicted = model.predict(state, _frame(1))
-
-        accepted = model.update_from_accept(
-            replace(state, prediction=predicted),
-            accepted_pos=(500.0, 500.0),
-            accepted_size=(500.0, 500.0),
-            score=1.0,
+    def test_reject_increases_uncertainty_and_preserves_motion(self) -> None:
+        model = _initialized_model(
+            config=KalmanPredictorConfig(reject_uncertainty_growth=2.0),
+            pos=(0.0, 0.0),
+            velocity=(4.0, 0.0),
         )
+        predicted = model.predict(PredictorPredictInput(frame=_frame(1, 1.0))).predictor_state
 
-        self.assertEqual(accepted.target_size, (100.0, 100.0))
-        self.assertEqual(accepted.target_pos, (50.0, 50.0))
+        model.update(PredictorUpdateInput(accepted=False, predictor_state=predicted))
+        rejected = _current_state(model)
 
-    def test_clamp_can_be_disabled(self) -> None:
-        model = KalmanPredictorModel(KalmanPredictorConfig(clamp_to_frame=False))
-        state = _state(pos=(95.0, 95.0), size=(20.0, 20.0), velocity=(20.0, 20.0))
-
-        predicted = model.predict(state, _frame(1))
-
-        self.assertEqual(predicted.target_pos, (115.0, 115.0))
+        self.assertEqual(rejected.target_pos, predicted.target_pos)
+        self.assertEqual(rejected.target_velocity, predicted.target_velocity)
+        self.assertGreater(rejected.uncertainty, predicted.uncertainty)
+        self.assertEqual(rejected.metadata["kalman_reject_count"], 1)
 
 
-def _frame(idx: int) -> _Frame:
-    return _Frame(image=_Image((100, 100, 3)), idx=idx, timestamp=float(idx))
+def _frame(idx: int, timestamp: float) -> _Frame:
+    return _Frame(image=None, idx=idx, timestamp=timestamp)
 
 
-def _state(
+def _initialized_model(
     *,
     pos: tuple[float, float],
-    size: tuple[float, float],
     velocity: tuple[float, float] = (0.0, 0.0),
-    size_velocity: tuple[float, float] = (0.0, 0.0),
-) -> BigTrackState:
-    prediction = TrackerPredictionState(
-        target_pos=pos,
-        target_size=size,
-        target_velocity=velocity,
-        target_size_velocity=size_velocity,
-        last_score=1.0,
-        uncertainty=0.0,
+    config: KalmanPredictorConfig | None = None,
+) -> KalmanPredictorModel:
+    model = KalmanPredictorModel(config)
+    model.initialize(
+        PredictorInitializeInput(
+            predictor_state=TrackerPredictionState(
+                target_pos=pos,
+                target_velocity=velocity,
+                uncertainty=0.0,
+                metadata={
+                    "kalman_last_frame_idx": 0,
+                    "kalman_last_timestamp": 0.0,
+                },
+            )
+        )
     )
-    return BigTrackState(
-        prediction=prediction,
-        matcher=MatcherState(init_template=object()),
-        output=TrackingOutput(
-            box=(pos[0] - size[0] / 2.0, pos[1] - size[1] / 2.0, size[0], size[1]),
-            frame_idx=0,
-            timestamp=0.0,
-            status=OutputStatus.ACTIVE,
-            confidence=1.0,
-        ),
-        mode=TrackerMode.TRACKING,
-        last_seen_frame=0,
-    )
+    return model
+
+
+def _current_state(model: KalmanPredictorModel) -> TrackerPredictionState:
+    state = model._state
+    if state is None:
+        raise AssertionError("predictor state was not initialized")
+    return state
 
 
 if __name__ == "__main__":
