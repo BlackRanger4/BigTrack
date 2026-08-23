@@ -12,7 +12,7 @@ class MatcherState:
     init_template: Any
     best_templates: Sequence[Any] = field(default_factory=tuple)
     adaptive_template: Optional[Any] = None
-    cached_features: Mapping[str, Any] = field(default_factory=dict)
+    cached_template: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -48,6 +48,7 @@ class MatcherTemplateOutput:
     """Output object from matcher template extraction."""
 
     template: Any
+    score: float = 1.0
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -56,6 +57,7 @@ class MatcherUpdateInput:
     """Input object for updating matcher state with an approved template."""
 
     template: Any
+    score: float = 1.0
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
