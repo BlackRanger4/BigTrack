@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Tuple
 
 from BigTracker.matcher import MatcherModel
 from BigTracker.matcher_models._boxes import box_to_center_size, center_size_to_box
@@ -61,7 +61,6 @@ class _FftMatchResult:
     localization_score: float
     peak_value: float
     second_peak_value: float
-    selected_template_index: int
     is_clipped: bool
     search_box: Box
 
@@ -137,32 +136,24 @@ class FftMatcherModel(MatcherModel):
         """Run FFT matching for each requested target position."""
 
         matcher_state = self._require_state()
-        templates = self._collect_templates(matcher_state)
-        if not templates:
-            raise ValueError("FftMatcherModel.match requires at least one template")
-
-        target_size = self._active_target_size(matcher_state)
+        template = self._select_template(matcher_state)
+        target_size = template.target_size
         bboxes: list[Box] = []
         scores: list[float] = []
         details: list[dict[str, Any]] = []
         for target_index, target_pos in enumerate(request.target_poses):
-            results = [
-                self._match_one_template(request.frame, template, target_pos, target_size, index)
-                for index, template in enumerate(templates)
-            ]
-            best = max(results, key=lambda result: result.match_score)
-            bboxes.append(best.box)
-            scores.append(best.match_score)
+            result = self._match_one_template(request.frame, template, target_pos, target_size)
+            bboxes.append(result.box)
+            scores.append(result.match_score)
             details.append(
                 {
                     "target_index": target_index,
-                    "selected_template_index": best.selected_template_index,
-                    "localization_score": best.localization_score,
-                    "ambiguity_score": best.ambiguity_score,
-                    "peak_value": best.peak_value,
-                    "second_peak_value": best.second_peak_value,
-                    "search_box": best.search_box,
-                    "is_clipped": best.is_clipped,
+                    "localization_score": result.localization_score,
+                    "ambiguity_score": result.ambiguity_score,
+                    "peak_value": result.peak_value,
+                    "second_peak_value": result.second_peak_value,
+                    "search_box": result.search_box,
+                    "is_clipped": result.is_clipped,
                 }
             )
 
@@ -171,7 +162,7 @@ class FftMatcherModel(MatcherModel):
             scores=scores,
             metadata={
                 "matcher": "fft",
-                "template_count": len(templates),
+                "template_source_frame_idx": template.source_frame_idx,
                 "target_size": target_size,
                 "details": details,
             },
@@ -211,7 +202,6 @@ class FftMatcherModel(MatcherModel):
         template: FftTemplate,
         search_center: Point,
         target_size: Size,
-        template_index: int,
     ) -> _FftMatchResult:
         """Match one encoded template against one search crop."""
 
@@ -259,19 +249,9 @@ class FftMatcherModel(MatcherModel):
             localization_score=localization_score,
             peak_value=peak_value,
             second_peak_value=second_peak_value,
-            selected_template_index=template_index,
             is_clipped=search_crop.is_clipped,
             search_box=search_crop.crop_box,
         )
-
-    def _collect_templates(self, matcher_state: MatcherState) -> Sequence[FftTemplate]:
-        """Return all templates that should vote during matching."""
-
-        templates = [matcher_state.init_template]
-        templates.extend(template_state.template for template_state in matcher_state.best_templates)
-        if matcher_state.adaptive_template is not None:
-            templates.append(matcher_state.adaptive_template)
-        return tuple(template for template in templates if isinstance(template, FftTemplate))
 
     def _template_crop_size(self, target_size: Size) -> Size:
         """Choose a square template crop from the target size."""
@@ -322,13 +302,13 @@ class FftMatcherModel(MatcherModel):
 
         return peak_value, second_peak_value, match_score, ambiguity_score
 
-    def _active_target_size(self, matcher_state: MatcherState) -> Size:
-        """Return target size from the currently active FFT template."""
+    def _select_template(self, matcher_state: MatcherState) -> FftTemplate:
+        """Select the active template for this match call."""
 
         template = matcher_state.adaptive_template or matcher_state.init_template
         if not isinstance(template, FftTemplate):
             raise TypeError("FftMatcherModel requires FftTemplate state")
-        return template.target_size
+        return template
 
     def _require_state(self) -> MatcherState:
         """Return initialized matcher state."""
