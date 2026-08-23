@@ -4,23 +4,27 @@ from dataclasses import dataclass, replace
 from typing import Sequence
 
 from BigTracker.big_trackers._decision import (
+    BigTrackCounters,
+    BigTrackDecision,
+    SearchCandidate,
     boxes_agree,
     clamp01,
     normalize_predictor_score,
     score_band,
-    select_best_match,
 )
 from BigTracker.big_trackers.base import BaseBigTrack
-from BigTracker.state import (
-    BigTrackCounters,
-    BigTrackDecision,
+from BigTracker.types import (
     BigTrackState,
-    MatchEvidence,
-    SearchCandidate,
+    BigTrackUpdateOutput,
+    Box,
+    FrameLike,
+    OutputStatus,
+    Point,
+    PredictorUpdateInput,
+    Size,
+    TrackerMode,
     TrackerPredictionState,
-    TrackingOutput,
 )
-from BigTracker.types import Box, FrameLike, OutputStatus, Point, Size, TrackerMode
 
 
 @dataclass(frozen=True)
@@ -51,15 +55,12 @@ class ScoreGatedBigTrack(BaseBigTrack):
         prediction: TrackerPredictionState,
         frame: FrameLike,
     ) -> Sequence[SearchCandidate]:
-        """Create one search candidate at the predictor's current target position."""
-
         return (
             SearchCandidate(
                 candidate_id="predicted",
                 search_center=prediction.target_pos,
-                predicted_target_size=prediction.target_size,
                 prediction_confidence=normalize_predictor_score(
-                    prediction.last_score,
+                    _last_score(prediction),
                     prediction.uncertainty,
                     self.config.predictor_uncertainty_scale,
                 ),
@@ -78,20 +79,20 @@ class ScoreGatedBigTrack(BaseBigTrack):
         state: BigTrackState,
         prediction: TrackerPredictionState,
         candidates: Sequence[SearchCandidate],
-        matches: Sequence[MatchEvidence],
+        bboxes: Sequence[Box],
+        scores: Sequence[float],
     ) -> BigTrackDecision:
-        """Choose visual evidence only when score and geometry are acceptable."""
-
-        predicted_box = _center_size_to_box(prediction.target_pos, prediction.target_size)
+        target_size = _target_size(state)
+        predicted_box = _center_size_to_box(prediction.target_pos, target_size)
         predictor_score = normalize_predictor_score(
-            prediction.last_score,
+            _last_score(prediction),
             prediction.uncertainty,
             self.config.predictor_uncertainty_scale,
         )
-        current_frame_idx = _candidate_frame_idx(candidates, state.output.frame_idx)
+        current_frame_idx = _candidate_frame_idx(candidates, state.output.frame_idx if state.output else 0)
 
-        choice = select_best_match(candidates, matches, score_fn=lambda match: clamp01(match.match_score))
-        if choice is None:
+        best_index = _best_score_index(scores)
+        if best_index is None or best_index >= len(bboxes):
             return self._reject_to_prediction(
                 state=state,
                 predicted_box=predicted_box,
@@ -99,23 +100,9 @@ class ScoreGatedBigTrack(BaseBigTrack):
                 reason="no_match",
             )
 
-        match = choice.match
-        matcher_score = clamp01(match.match_score)
+        matched_box = bboxes[best_index]
+        matcher_score = clamp01(scores[best_index])
         band = score_band(matcher_score, self.config.th_bad, self.config.th_good)
-
-        if band == "good":
-            accepted_pos, accepted_size = _box_to_center_size(match.box)
-            return BigTrackDecision(
-                accepted=True,
-                accepted_box=match.box,
-                accepted_target_pos=accepted_pos,
-                accepted_target_size=accepted_size,
-                output_status=OutputStatus.ACTIVE,
-                next_mode=TrackerMode.TRACKING,
-                confidence=matcher_score,
-                allow_template_update=self._allow_template_update(state, match, current_frame_idx),
-                reason="good_match",
-            )
 
         if state.mode in (TrackerMode.RECOVERY, TrackerMode.LOST):
             return self._reject_to_prediction(
@@ -125,43 +112,44 @@ class ScoreGatedBigTrack(BaseBigTrack):
                 reason=f"{band}_match_cannot_recover",
             )
 
-        if band == "weak":
-            agrees = boxes_agree(
-                predicted_box,
-                match.box,
-                self.config.max_center_error,
-                self.config.max_size_error,
+        if band == "good":
+            return BigTrackDecision(
+                accepted=True,
+                accepted_box=matched_box,
+                accepted_target_pos=_box_to_center(matched_box),
+                output_status=OutputStatus.ACTIVE,
+                next_mode=TrackerMode.TRACKING,
+                confidence=matcher_score,
+                allow_template_update=self._allow_template_update(matcher_score, state, current_frame_idx),
+                reason="good_match",
             )
-            if agrees:
-                accepted_pos, accepted_size = _box_to_center_size(match.box)
-                next_mode = TrackerMode.TRACKING if state.mode == TrackerMode.TRACKING else TrackerMode.UNCERTAIN
-                output_status = OutputStatus.ACTIVE if next_mode == TrackerMode.TRACKING else OutputStatus.UNCERTAIN
-                return BigTrackDecision(
-                    accepted=True,
-                    accepted_box=match.box,
-                    accepted_target_pos=accepted_pos,
-                    accepted_target_size=accepted_size,
-                    output_status=output_status,
-                    next_mode=next_mode,
-                    confidence=matcher_score,
-                    allow_template_update=False,
-                    reason="weak_match_agrees_with_prediction",
-                )
 
-            return self._reject_to_prediction(
-                state=state,
-                predicted_box=predicted_box,
-                predictor_score=min(predictor_score, matcher_score),
-                reason="weak_match_far_from_prediction",
-                preferred_mode=TrackerMode.UNCERTAIN,
+
+        if band == "weak" and boxes_agree(
+            predicted_box,
+            matched_box,
+            self.config.max_center_error,
+            self.config.max_size_error,
+        ):
+            next_mode = TrackerMode.TRACKING if state.mode == TrackerMode.TRACKING else TrackerMode.UNCERTAIN
+            output_status = OutputStatus.ACTIVE if next_mode == TrackerMode.TRACKING else OutputStatus.UNCERTAIN
+            return BigTrackDecision(
+                accepted=True,
+                accepted_box=matched_box,
+                accepted_target_pos=_box_to_center(matched_box),
+                output_status=output_status,
+                next_mode=next_mode,
+                confidence=matcher_score,
+                allow_template_update=False,
+                reason="weak_match_agrees_with_prediction",
             )
 
         return self._reject_to_prediction(
             state=state,
             predicted_box=predicted_box,
             predictor_score=min(predictor_score, matcher_score),
-            reason="bad_match_score",
-            preferred_mode=TrackerMode.OCCLUDED,
+            reason="bad_match_score" if band == "bad" else "weak_match_far_from_prediction",
+            preferred_mode=TrackerMode.OCCLUDED if band == "bad" else TrackerMode.UNCERTAIN,
         )
 
     def apply_decision(
@@ -171,63 +159,78 @@ class ScoreGatedBigTrack(BaseBigTrack):
         decision: BigTrackDecision,
         frame: FrameLike,
     ) -> BigTrackState:
-        """Apply accepted visual evidence or propagate the predictor on reject."""
-
-        predicted_state = replace(state, prediction=prediction)
         if decision.accepted:
-            if decision.accepted_target_pos is None or decision.accepted_target_size is None:
-                raise ValueError("Accepted decision requires target position and size")
-            next_prediction = self.predictor.update_from_accept(
-                state=predicted_state,
-                accepted_pos=decision.accepted_target_pos,
-                accepted_size=decision.accepted_target_size,
-                score=decision.confidence,
+            if decision.accepted_box is None or decision.accepted_target_pos is None:
+                raise ValueError("Accepted decision requires target position and box")
+            next_prediction = replace(
+                prediction,
+                target_pos=decision.accepted_target_pos,
+                metadata={**dict(prediction.metadata), "last_score": decision.confidence},
+            )
+            self.predictor.update(
+                PredictorUpdateInput(
+                    accepted=True,
+                    predictor_state=next_prediction,
+                    metadata={"score": decision.confidence},
+                )
             )
         else:
-            next_prediction = self.predictor.update_from_reject(predicted_state)
+            next_prediction = replace(
+                prediction,
+                metadata={**dict(prediction.metadata), "last_score": decision.confidence},
+            )
+            self.predictor.update(
+                PredictorUpdateInput(
+                    accepted=False,
+                    predictor_state=next_prediction,
+                    metadata={"score": decision.confidence},
+                )
+            )
 
-        output = TrackingOutput(
+        output = BigTrackUpdateOutput(
+            ok=True,
             box=decision.accepted_box,
             frame_idx=frame.idx,
             timestamp=frame.timestamp,
             status=decision.output_status,
             confidence=decision.confidence,
         )
+        counters = self._next_counters(state, decision)
         metadata = dict(state.metadata)
-        metadata.setdefault("score_gated_initial_frame", state.output.frame_idx)
+        metadata["age"] = counters.age
+        metadata["score_gated_counters"] = counters
+        metadata.setdefault("score_gated_initial_frame", state.output.frame_idx if state.output else frame.idx)
         metadata["score_gated_last_reason"] = decision.reason
         metadata["score_gated_last_template_update"] = bool(decision.allow_template_update)
+        if decision.accepted_box is not None:
+            metadata["target_size"] = _box_size(decision.accepted_box)
         if decision.allow_template_update:
             metadata["score_gated_last_template_update_frame"] = frame.idx
 
         return replace(
             state,
-            prediction=next_prediction,
+            predictor_state=next_prediction,
             output=output,
             mode=decision.next_mode,
-            counters=self._next_counters(state, decision),
             last_seen_frame=frame.idx if decision.accepted else state.last_seen_frame,
             metadata=metadata,
         )
 
     def _allow_template_update(
         self,
+        matcher_score: float,
         state: BigTrackState,
-        match: MatchEvidence,
         current_frame_idx: int,
     ) -> bool:
-        """Allow template updates only on good matches at the configured interval."""
-
-        if clamp01(match.match_score) < clamp01(self.config.th_good):
-            return False
-        if match.is_clipped and not self.config.template_allow_clipped:
+        if clamp01(matcher_score) < clamp01(self.config.th_good):
             return False
 
         interval = max(1, int(self.config.template_update_interval))
+        output_frame = state.output.frame_idx if state.output else current_frame_idx
         last_update_frame = int(
             state.metadata.get(
                 "score_gated_last_template_update_frame",
-                state.metadata.get("score_gated_initial_frame", state.output.frame_idx),
+                state.metadata.get("score_gated_initial_frame", output_frame),
             )
         )
         return current_frame_idx - last_update_frame >= interval
@@ -241,8 +244,6 @@ class ScoreGatedBigTrack(BaseBigTrack):
         reason: str,
         preferred_mode: TrackerMode | None = None,
     ) -> BigTrackDecision:
-        """Build a rejected visual decision that emits the predictor box when possible."""
-
         next_mode = self._reject_mode(state, preferred_mode)
         output_status = _status_for_mode(next_mode)
         output_box = None if next_mode == TrackerMode.LOST else predicted_box
@@ -252,7 +253,6 @@ class ScoreGatedBigTrack(BaseBigTrack):
             accepted=False,
             accepted_box=output_box,
             accepted_target_pos=None,
-            accepted_target_size=None,
             output_status=output_status,
             next_mode=next_mode,
             confidence=confidence,
@@ -261,60 +261,55 @@ class ScoreGatedBigTrack(BaseBigTrack):
         )
 
     def _reject_mode(self, state: BigTrackState, preferred_mode: TrackerMode | None) -> TrackerMode:
+        counters = _counters(state)
         if state.mode == TrackerMode.LOST:
             return TrackerMode.LOST
 
         if state.mode == TrackerMode.RECOVERY:
-            next_recovery_count = state.counters.recovery_count + 1
-            if next_recovery_count >= max(1, int(self.config.lost_after)):
+            if counters.recovery_count + 1 >= max(1, int(self.config.lost_after)):
                 return TrackerMode.LOST
             return TrackerMode.RECOVERY
 
-        next_uncertain_count = state.counters.uncertain_count + 1
-        if next_uncertain_count >= max(1, int(self.config.recovery_after)):
+        if counters.uncertain_count + 1 >= max(1, int(self.config.recovery_after)):
             return TrackerMode.RECOVERY
         return preferred_mode or TrackerMode.UNCERTAIN
 
     def _next_counters(self, state: BigTrackState, decision: BigTrackDecision) -> BigTrackCounters:
-        age = state.counters.age + 1
+        counters = _counters(state)
+        age = counters.age + 1
 
         if decision.next_mode == TrackerMode.TRACKING:
             return BigTrackCounters(age=age)
         if decision.next_mode == TrackerMode.UNCERTAIN:
-            return BigTrackCounters(
-                age=age,
-                uncertain_count=state.counters.uncertain_count + 1,
-                lost_count=0,
-                recovery_count=0,
-            )
+            return BigTrackCounters(age=age, uncertain_count=counters.uncertain_count + 1)
         if decision.next_mode == TrackerMode.OCCLUDED:
             return BigTrackCounters(
                 age=age,
-                uncertain_count=state.counters.uncertain_count + 1,
-                lost_count=state.counters.lost_count + 1,
-                recovery_count=0,
+                uncertain_count=counters.uncertain_count + 1,
+                lost_count=counters.lost_count + 1,
             )
         if decision.next_mode == TrackerMode.RECOVERY:
             return BigTrackCounters(
                 age=age,
-                uncertain_count=state.counters.uncertain_count + 1,
-                lost_count=state.counters.lost_count + 1,
-                recovery_count=state.counters.recovery_count + 1,
+                uncertain_count=counters.uncertain_count + 1,
+                lost_count=counters.lost_count + 1,
+                recovery_count=counters.recovery_count + 1,
             )
         return BigTrackCounters(
             age=age,
-            uncertain_count=state.counters.uncertain_count,
-            lost_count=state.counters.lost_count,
-            recovery_count=state.counters.recovery_count + 1,
+            uncertain_count=counters.uncertain_count,
+            lost_count=counters.lost_count,
+            recovery_count=counters.recovery_count + 1,
         )
 
 
-def _box_to_center_size(box: Box) -> tuple[Point, Size]:
+def _box_to_center(box: Box) -> Point:
     x, y, width, height = box
-    return (
-        (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0),
-        (float(width), float(height)),
-    )
+    return (float(x) + float(width) / 2.0, float(y) + float(height) / 2.0)
+
+
+def _box_size(box: Box) -> Size:
+    return (float(box[2]), float(box[3]))
 
 
 def _center_size_to_box(target_pos: Point, target_size: Size) -> Box:
@@ -325,6 +320,32 @@ def _center_size_to_box(target_pos: Point, target_size: Size) -> Box:
         float(width),
         float(height),
     )
+
+
+def _target_size(state: BigTrackState) -> Size:
+    size = state.metadata.get("target_size")
+    if size is not None:
+        return (float(size[0]), float(size[1]))
+    if state.output and state.output.box is not None:
+        return _box_size(state.output.box)
+    return (1.0, 1.0)
+
+
+def _last_score(prediction: TrackerPredictionState) -> float:
+    return float(prediction.metadata.get("last_score", 1.0))
+
+
+def _counters(state: BigTrackState) -> BigTrackCounters:
+    counters = state.metadata.get("score_gated_counters")
+    if isinstance(counters, BigTrackCounters):
+        return counters
+    return BigTrackCounters(age=int(state.metadata.get("age", 0)))
+
+
+def _best_score_index(scores: Sequence[float]) -> int | None:
+    if not scores:
+        return None
+    return max(range(len(scores)), key=lambda index: (clamp01(scores[index]), index))
 
 
 def _candidate_frame_idx(candidates: Sequence[SearchCandidate], fallback: int) -> int:
