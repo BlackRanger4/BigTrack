@@ -7,18 +7,26 @@ from typing import Any
 def load_mixformerv2_config(config_path: Path, variant: str) -> Any:
     """Load a local MixFormerV2 config object."""
 
-    if str(variant).lower() == "online":
+    variant_name = str(variant).lower()
+    if variant_name == "online":
         from BigTracker.thirdparty.mixformerv2.lib.config.mixformer2_vit_online.config import (
             update_new_config_from_file,
         )
-    elif str(variant).lower() == "offline":
+        return update_new_config_from_file(str(config_path))
+    if variant_name == "offline":
         from BigTracker.thirdparty.mixformerv2.lib.config.mixformer2_vit.config import (
-            update_new_config_from_file,
+            update_new_config_from_file as update_offline_config_from_file,
         )
-    else:
-        raise ValueError(f"Unknown MixFormerV2 variant: {variant!r}")
 
-    return update_new_config_from_file(str(config_path))
+        try:
+            return update_offline_config_from_file(str(config_path))
+        except ValueError:
+            from BigTracker.thirdparty.mixformerv2.lib.config.mixformer2_vit_online.config import (
+                update_new_config_from_file as update_online_config_from_file,
+            )
+
+            return update_online_config_from_file(str(config_path))
+    raise ValueError(f"Unknown MixFormerV2 variant: {variant!r}")
 
 
 def build_mixformerv2_network(config: Any, variant: str, training: bool = False) -> Any:

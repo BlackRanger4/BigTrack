@@ -390,7 +390,7 @@ def _load_real_mixformerv2_backend(
     """Load MixFormerV2 source modules, YAML config, network, and checkpoint."""
 
     config_path = Path(config.config_path) if config.config_path else (
-        Path("ignores/Models/mixformerv2/config/288_depth8_score.yaml")
+        _default_mixformerv2_config_path(str(config.variant).lower())
     )
     checkpoint_path = Path(config.checkpoint_path) if config.checkpoint_path else (
         Path("ignores/Models/mixformerv2/models/mixformerv2_base.pth.tar")
@@ -407,22 +407,63 @@ def _load_real_mixformerv2_backend(
     effective_config = _config_from_loaded_mixformerv2_cfg(config, loaded_cfg, variant)
     with _source_cuda_build_guard(torch, device):
         network = build_mixformerv2_network(loaded_cfg, variant, training=False)
-    _load_mixformerv2_checkpoint(network, checkpoint_path)
+    _load_mixformerv2_checkpoint(network, checkpoint_path, strict=variant != "offline")
     network = network.to(device)
     _move_mixformerv2_internal_tensors(network, device)
     return _TorchMixFormerV2Backend(network, loaded_cfg, device), effective_config
 
 
-def _load_mixformerv2_checkpoint(network: Any, checkpoint_path: Path) -> None:
+def _load_mixformerv2_checkpoint(network: Any, checkpoint_path: Path, strict: bool = True) -> None:
     torch = _require_torch()
     try:
-        checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+        with _mixformerv2_checkpoint_safe_globals(torch):
+            checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=True)
     except TypeError:
         checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
     state_dict = checkpoint.get("net", checkpoint) if isinstance(checkpoint, dict) else checkpoint
     if not isinstance(state_dict, dict):
         raise ValueError(f"MixFormerV2 checkpoint does not contain a state dict: {checkpoint_path}")
-    network.load_state_dict(state_dict, strict=True)
+    network.load_state_dict(state_dict, strict=strict)
+
+
+def _default_mixformerv2_config_path(variant: str) -> Path:
+    if variant == "online":
+        return Path("ignores/Models/mixformerv2/config/288_depth8_score.yaml")
+    if variant == "offline":
+        return Path("ignores/Models/mixformerv2/config/288_depth8_score.yaml")
+    raise ValueError(f"Unknown MixFormerV2 variant: {variant!r}")
+
+
+@contextmanager
+def _mixformerv2_checkpoint_safe_globals(torch: Any) -> Any:
+    """Allow the source checkpoint's training-stat metadata while loading tensors only."""
+
+    from BigTracker.thirdparty.mixformerv2.lib.train.admin.local import EnvironmentSettings
+    from BigTracker.thirdparty.mixformerv2.lib.train.admin.settings import Settings
+    from BigTracker.thirdparty.mixformerv2.lib.train.admin.stats import AverageMeter, StatValue
+
+    safe_globals = getattr(torch.serialization, "safe_globals", None)
+    if safe_globals is None:
+        yield
+        return
+
+    try:
+        with safe_globals(
+            [
+                (AverageMeter, "lib.train.admin.stats.AverageMeter"),
+                (StatValue, "lib.train.admin.stats.StatValue"),
+                (Settings, "lib.train.admin.settings.Settings"),
+                (EnvironmentSettings, "lib.train.admin.local.EnvironmentSettings"),
+            ]
+        ):
+            yield
+    except TypeError:
+        AverageMeter.__module__ = "lib.train.admin.stats"
+        StatValue.__module__ = "lib.train.admin.stats"
+        Settings.__module__ = "lib.train.admin.settings"
+        EnvironmentSettings.__module__ = "lib.train.admin.local"
+        with safe_globals([AverageMeter, StatValue, Settings, EnvironmentSettings]):
+            yield
 
 
 @contextmanager
