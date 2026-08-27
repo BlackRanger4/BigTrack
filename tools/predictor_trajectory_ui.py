@@ -590,6 +590,24 @@ def precompute_predictions(
         )
 
         for source_idx, point in enumerate(trajectory):
+            # The cached row is defined as a forecast *from* source_idx.
+            # Bring the live model through that frame before taking its state,
+            # so an M=1 row predicts source_idx + 1 with one frame of dt.
+            if source_idx > 0:
+                predicted_current = predictor.predict(PredictorPredictInput(frame=_frame(point))).predictor_state
+                predictor.update(
+                    PredictorUpdateInput(
+                        accepted=True,
+                        predictor_state=TrackerPredictionState(
+                            target_pos=point.observation,
+                            target_velocity=predicted_current.target_velocity,
+                            uncertainty=predicted_current.uncertainty,
+                            metadata=predicted_current.metadata,
+                        ),
+                        metadata={"score": point.observation_score},
+                    )
+                )
+
             source_state = _current_state(predictor)
             for m in m_values:
                 target_idx = source_idx + m
@@ -609,22 +627,6 @@ def precompute_predictions(
                     error=error,
                 )
 
-            # Per requested lifecycle: cache future predictions from frame i,
-            # then update the live predictor using observation i.
-            if source_idx > 0:
-                predicted_current = predictor.predict(PredictorPredictInput(frame=_frame(point))).predictor_state
-                predictor.update(
-                    PredictorUpdateInput(
-                        accepted=True,
-                        predictor_state=TrackerPredictionState(
-                            target_pos=point.observation,
-                            target_velocity=predicted_current.target_velocity,
-                            uncertainty=predicted_current.uncertainty,
-                            metadata=predicted_current.metadata,
-                        ),
-                        metadata={"score": point.observation_score},
-                    )
-                )
     return cache
 
 
