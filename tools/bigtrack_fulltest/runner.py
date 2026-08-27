@@ -172,7 +172,7 @@ class FullTestRunner:
                     if self.config.show_debug_window:
                         cv2.imshow(self.config.debug_window_name, self._render_debug_frame(self.current_frame))
 
-                key = cv2.waitKey(self.config.frame_delay_ms) & 0xFF
+                key = cv2.waitKeyEx(max(1, int(self.config.frame_delay_ms))) & 0xFF
                 self._handle_key(key)
         finally:
             if self.log_writer is not None:
@@ -498,7 +498,7 @@ def _apply_zoom(image, view: ViewState, display_size: Tuple[int, int]):
     display_height = max(1, int(display_size[1]))
     if view.zoom <= 1.0:
         view.last_view = (0.0, 0.0, display_width / float(width), display_height / float(height))
-        return cv2.resize(image, (display_width, display_height), interpolation=cv2.INTER_LINEAR)
+        return _resize_for_display(image, display_width, display_height)
 
     crop_width = max(1, min(width, int(round(width / view.zoom))))
     crop_height = max(1, min(height, int(round(height / view.zoom))))
@@ -515,7 +515,21 @@ def _apply_zoom(image, view: ViewState, display_size: Tuple[int, int]):
         display_width / float(crop_width),
         display_height / float(crop_height),
     )
-    return cv2.resize(crop, (display_width, display_height), interpolation=cv2.INTER_LINEAR)
+    return _resize_for_display(crop, display_width, display_height)
+
+
+def _resize_for_display(image, display_width: int, display_height: int):
+    """Resize directly from source pixels using an interpolation suited to the scale."""
+    cv2 = _require_cv2()
+    source_height, source_width = image.shape[:2]
+    if source_width == display_width and source_height == display_height:
+        return image
+    interpolation = (
+        cv2.INTER_AREA
+        if source_width >= display_width and source_height >= display_height
+        else cv2.INTER_CUBIC
+    )
+    return cv2.resize(image, (display_width, display_height), interpolation=interpolation)
 
 
 def _display_box_to_image_box(display_box: Box, view: ViewState) -> Box:
