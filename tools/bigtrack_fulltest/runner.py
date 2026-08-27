@@ -541,20 +541,29 @@ def _apply_zoom(image, view: ViewState, display_size: Tuple[int, int]):
         display_width / float(crop_width),
         display_height / float(crop_height),
     )
-    return _resize_for_display(crop, display_width, display_height)
+    return _resize_for_display(crop, display_width, display_height, preserve_pixels=True)
 
 
-def _resize_for_display(image, display_width: int, display_height: int):
+def _resize_for_display(
+    image,
+    display_width: int,
+    display_height: int,
+    *,
+    preserve_pixels: bool = False,
+):
     """Resize directly from source pixels using an interpolation suited to the scale."""
     cv2 = _require_cv2()
     source_height, source_width = image.shape[:2]
     if source_width == display_width and source_height == display_height:
         return image
-    interpolation = (
-        cv2.INTER_AREA
-        if source_width >= display_width and source_height >= display_height
-        else cv2.INTER_CUBIC
-    )
+    if preserve_pixels:
+        interpolation = cv2.INTER_NEAREST
+    else:
+        interpolation = (
+            cv2.INTER_AREA
+            if source_width >= display_width and source_height >= display_height
+            else cv2.INTER_CUBIC
+        )
     return cv2.resize(image, (display_width, display_height), interpolation=interpolation)
 
 
