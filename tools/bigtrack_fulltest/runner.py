@@ -37,6 +37,8 @@ class RunnerConfig:
     debug_height: int = 720
     show_debug_window: bool = True
     debug_history_length: int = 3
+    debug_history_min_alpha: float = 0.08
+    debug_history_max_alpha: float = 0.60
     start_paused: bool = True
     continuous: bool = False
     frame_delay_ms: int = 1
@@ -287,14 +289,18 @@ class FullTestRunner:
 
     def _render_frame(self, frame: Frame, draw_overlay: bool = True):
         image = frame.image.copy()
-        if self.config.draw_tracker_box and self.latest_output and self.latest_output.box:
-            _draw_box(image, self.latest_output.box, color=(0, 255, 0), thickness=2)
-
         display = _apply_zoom(
             image,
             self.frame_view,
             display_size=(self.config.window_width, self.config.window_height),
         )
+        if self.config.draw_tracker_box and self.latest_output and self.latest_output.box:
+            _draw_box(
+                display,
+                _image_box_to_display(self.latest_output.box, self.frame_view),
+                color=(0, 255, 0),
+                thickness=2,
+            )
         if draw_overlay:
             _draw_overlay(
                 display=display,
@@ -304,12 +310,12 @@ class FullTestRunner:
 
     def _render_debug_frame(self, frame: Frame):
         image = frame.image.copy()
-        self._draw_debug_history(image)
         display = _apply_zoom(
             image,
             self.debug_view,
             display_size=(self.config.debug_width, self.config.debug_height),
         )
+        self._draw_debug_history(display, self.debug_view)
         _draw_overlay(display, self._debug_lines(frame))
         return display
 
@@ -369,35 +375,49 @@ class FullTestRunner:
         if snapshot is not None:
             self.debug_history.append(snapshot)
 
-    def _draw_debug_history(self, image) -> None:
+    def _draw_debug_history(self, image, view: ViewState) -> None:
         if not self.debug_history:
             return
 
         count = len(self.debug_history)
         for index, snapshot in enumerate(self.debug_history):
-            alpha = 0.15 + 0.85 * float(index + 1) / float(count)
+            alpha = _history_alpha(self.config, index, count)
             current = index == count - 1
             thickness = 2 if current else 1
             for bbox_index, bbox in enumerate(getattr(snapshot, "matcher_bboxes", ())):
                 score = _score_at(getattr(snapshot, "matcher_scores", ()), bbox_index)
                 matched_center = _box_center(bbox)
                 predictor_pos = getattr(snapshot, "predictor_target_pos", None)
-                _draw_box_alpha(image, bbox, (40, 180, 255), alpha, thickness)
-                _draw_point_alpha(image, matched_center, (40, 180, 255), alpha, 3 if current else 2)
+                display_matched_center = _image_point_to_display(matched_center, view)
+                _draw_box_alpha(image, _image_box_to_display(bbox, view), (40, 180, 255), alpha, thickness)
+                _draw_point_alpha(image, display_matched_center, (40, 180, 255), alpha, 3 if current else 2)
                 if predictor_pos is not None:
-                    _draw_line_alpha(image, predictor_pos, matched_center, (255, 190, 40), alpha * 0.75, thickness)
+                    _draw_line_alpha(
+                        image,
+                        _image_point_to_display(predictor_pos, view),
+                        display_matched_center,
+                        (255, 190, 40),
+                        alpha * 0.75,
+                        thickness,
+                    )
                 if current:
-                    _draw_label(image, f"m{bbox_index} {score:.2f}", matched_center, (40, 180, 255))
+                    _draw_label(image, f"m{bbox_index} {score:.2f}", display_matched_center, (40, 180, 255))
 
             predictor_pos = getattr(snapshot, "predictor_target_pos", None)
             if predictor_pos is not None:
-                _draw_point_alpha(image, predictor_pos, (255, 80, 80), alpha, 4 if current else 2)
+                _draw_point_alpha(
+                    image,
+                    _image_point_to_display(predictor_pos, view),
+                    (255, 80, 80),
+                    alpha,
+                    4 if current else 2,
+                )
 
             post_update_state = getattr(snapshot, "predictor_post_update_state", None)
             if post_update_state is not None:
                 _draw_point_alpha(
                     image,
-                    post_update_state.target_pos,
+                    _image_point_to_display(post_update_state.target_pos, view),
                     (210, 80, 255),
                     alpha,
                     4 if current else 2,
@@ -405,7 +425,13 @@ class FullTestRunner:
 
             accepted_box = getattr(snapshot, "accepted_box", None)
             if accepted_box is not None:
-                _draw_box_alpha(image, accepted_box, (80, 255, 80), alpha, 2 if current else 1)
+                _draw_box_alpha(
+                    image,
+                    _image_box_to_display(accepted_box, view),
+                    (80, 255, 80),
+                    alpha,
+                    2 if current else 1,
+                )
 
     def _debug_lines(self, frame: Frame) -> list[str]:
         snapshot = self.debug_history[-1] if self.debug_history else None
@@ -541,6 +567,28 @@ def _display_box_to_image_box(display_box: Box, view: ViewState) -> Box:
         width / max(scale_x, 1e-6),
         height / max(scale_y, 1e-6),
     )
+
+
+def _image_box_to_display(image_box: Box, view: ViewState) -> Box:
+    view_x, view_y, scale_x, scale_y = view.last_view
+    x, y, width, height = image_box
+    return (
+        (float(x) - view_x) * scale_x,
+        (float(y) - view_y) * scale_y,
+        float(width) * scale_x,
+        float(height) * scale_y,
+    )
+
+
+def _image_point_to_display(point: Tuple[float, float], view: ViewState) -> Tuple[float, float]:
+    view_x, view_y, scale_x, scale_y = view.last_view
+    return (float(point[0]) - view_x) * scale_x, (float(point[1]) - view_y) * scale_y
+
+
+def _history_alpha(config: RunnerConfig, index: int, count: int) -> float:
+    minimum = _clamp_alpha(config.debug_history_min_alpha)
+    maximum = max(minimum, _clamp_alpha(config.debug_history_max_alpha))
+    return minimum + (maximum - minimum) * float(index + 1) / float(max(1, count))
 
 
 def _draw_overlay(display, lines: list[str]) -> None:
