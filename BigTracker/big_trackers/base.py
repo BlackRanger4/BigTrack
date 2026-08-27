@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import time
 from typing import Optional, Sequence
 
 from BigTracker.big_track import BigTrack
@@ -23,6 +24,7 @@ from BigTracker.types import (
     Point,
     PredictorInitializeInput,
     PredictorPredictInput,
+    PredictorUpdateInput,
     TrackerMode,
     TrackerPredictionState,
 )
@@ -36,6 +38,8 @@ class BigTrackDebugSnapshot:
     timestamp: float
     predictor_target_pos: Point
     predictor_target_velocity: Point
+    predictor_pre_update_state: TrackerPredictionState
+    predictor_post_update_state: TrackerPredictionState
     candidate_target_poses: tuple[Point, ...]
     matcher_bboxes: tuple[Box, ...]
     matcher_scores: tuple[float, ...]
@@ -44,6 +48,9 @@ class BigTrackDebugSnapshot:
     decision_reason: str
     mode: TrackerMode
     output: BigTrackUpdateOutput
+    predictor_predict_ms: float
+    matcher_match_ms: float
+    predictor_update_ms: float
 
 
 class BaseBigTrack(BigTrack):
@@ -55,6 +62,8 @@ class BaseBigTrack(BigTrack):
         self._state: Optional[BigTrackState] = None
         self._output: Optional[BigTrackUpdateOutput] = None
         self._last_debug: Optional[BigTrackDebugSnapshot] = None
+        self._last_predictor_update_state: Optional[TrackerPredictionState] = None
+        self._last_predictor_update_ms = 0.0
 
     def initialize(self, request: BigTrackInitializeInput) -> BigTrackInitializeOutput:
         target_pos = _box_to_center(request.box)
@@ -136,18 +145,26 @@ class BaseBigTrack(BigTrack):
 
     def update(self, request: BigTrackUpdateInput) -> BigTrackUpdateOutput:
         state = self._require_state()
+        predict_start = time.perf_counter()
         prediction = self.predictor.predict(
             PredictorPredictInput(frame=request.frame, metadata=request.metadata)
         ).predictor_state
+        predictor_predict_ms = (time.perf_counter() - predict_start) * 1000.0
         candidates = self.make_candidates(state, prediction, request.frame)
+        match_start = time.perf_counter()
         match_output = self.matcher.match(
             MatcherMatchInput(
                 frame=request.frame,
                 target_poses=[candidate.search_center for candidate in candidates],
             )
         )
+        matcher_match_ms = (time.perf_counter() - match_start) * 1000.0
         decision = self.decide(state, prediction, candidates, match_output.bboxes, match_output.scores)
+        self._last_predictor_update_state = None
+        self._last_predictor_update_ms = 0.0
         next_state = self.apply_decision(state, prediction, decision, request.frame)
+        post_update_state = self._last_predictor_update_state or next_state.predictor_state
+        next_state = replace(next_state, predictor_state=post_update_state)
 
         if decision.allow_template_update:
             if decision.accepted_box is None:
@@ -170,6 +187,8 @@ class BaseBigTrack(BigTrack):
             timestamp=request.frame.timestamp,
             predictor_target_pos=prediction.target_pos,
             predictor_target_velocity=prediction.target_velocity,
+            predictor_pre_update_state=prediction,
+            predictor_post_update_state=post_update_state,
             candidate_target_poses=tuple(candidate.search_center for candidate in candidates),
             matcher_bboxes=tuple(match_output.bboxes),
             matcher_scores=tuple(float(score) for score in match_output.scores),
@@ -178,6 +197,9 @@ class BaseBigTrack(BigTrack):
             decision_reason=decision.reason,
             mode=decision.next_mode,
             output=next_state.output,
+            predictor_predict_ms=predictor_predict_ms,
+            matcher_match_ms=matcher_match_ms,
+            predictor_update_ms=self._last_predictor_update_ms,
         )
         return next_state.output
 
@@ -185,6 +207,8 @@ class BaseBigTrack(BigTrack):
         self._state = None
         self._output = None
         self._last_debug = None
+        self._last_predictor_update_state = None
+        self._last_predictor_update_ms = 0.0
         self.predictor.reset()
         self.matcher.reset()
 
@@ -201,6 +225,13 @@ class BaseBigTrack(BigTrack):
 
     def get_debug_snapshot(self) -> Optional[BigTrackDebugSnapshot]:
         return self._last_debug
+
+    def _update_predictor(self, request: PredictorUpdateInput) -> None:
+        """Apply the policy's correction and retain its post-update state/timing."""
+        start = time.perf_counter()
+        output = self.predictor.update(request)
+        self._last_predictor_update_ms = (time.perf_counter() - start) * 1000.0
+        self._last_predictor_update_state = output.predictor_state or request.predictor_state
 
     def make_candidates(
         self,

@@ -79,7 +79,7 @@ class SimpleBigTrack(BaseBigTrack):
             raise ValueError("SimpleBigTrack accepted decision requires target geometry")
 
         next_prediction = replace(prediction, target_pos=decision.accepted_target_pos)
-        self.predictor.update(
+        self._update_predictor(
             PredictorUpdateInput(
                 accepted=True,
                 predictor_state=next_prediction,

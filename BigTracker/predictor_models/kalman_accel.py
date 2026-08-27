@@ -185,7 +185,7 @@ class ConstantAccelerationKalmanPredictorModel(PredictorModel):
             ),
             metadata=metadata,
         )
-        return PredictorUpdateOutput(ok=True, metadata=request.metadata)
+        return PredictorUpdateOutput(ok=True, predictor_state=self._state, metadata=request.metadata)
 
     def reset(self) -> None:
         self._state = None

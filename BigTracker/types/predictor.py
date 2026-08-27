@@ -62,3 +62,4 @@ class PredictorUpdateOutput:
 
     ok: bool
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    predictor_state: TrackerPredictionState | None = None

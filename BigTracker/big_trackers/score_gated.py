@@ -167,7 +167,7 @@ class ScoreGatedBigTrack(BaseBigTrack):
                 target_pos=decision.accepted_target_pos,
                 metadata={**dict(prediction.metadata), "last_score": decision.confidence},
             )
-            self.predictor.update(
+            self._update_predictor(
                 PredictorUpdateInput(
                     accepted=True,
                     predictor_state=next_prediction,
@@ -179,7 +179,7 @@ class ScoreGatedBigTrack(BaseBigTrack):
                 prediction,
                 metadata={**dict(prediction.metadata), "last_score": decision.confidence},
             )
-            self.predictor.update(
+            self._update_predictor(
                 PredictorUpdateInput(
                     accepted=False,
                     predictor_state=next_prediction,
