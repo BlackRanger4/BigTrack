@@ -34,8 +34,8 @@ from BigTracker.types import (  # noqa: E402
 )
 
 
-FRAME_SIZE = (640.0, 360.0)
-DEFAULT_M_VALUES = "1,2,3,5,8,13,21,34"
+FRAME_SIZE = (1920.0, 1080.0)
+DEFAULT_M_VALUES = "1,3,5,10"
 
 
 @dataclass(frozen=True)

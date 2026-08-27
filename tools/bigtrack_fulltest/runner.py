@@ -36,7 +36,7 @@ class RunnerConfig:
     debug_width: int = 1280
     debug_height: int = 720
     show_debug_window: bool = True
-    debug_history_length: int = 40
+    debug_history_length: int = 3
     start_paused: bool = True
     continuous: bool = False
     frame_delay_ms: int = 1
