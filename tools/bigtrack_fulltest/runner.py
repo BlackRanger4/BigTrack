@@ -40,6 +40,7 @@ class RunnerConfig:
     start_paused: bool = True
     continuous: bool = False
     frame_delay_ms: int = 1
+    windows_timer_resolution_ms: int = 1
     draw_tracker_box: bool = True
     draw_key_help: bool = True
     max_timing_samples: int = 300
@@ -150,16 +151,16 @@ class FullTestRunner:
 
     def run(self) -> None:
         cv2 = _require_cv2()
-        cv2.namedWindow(self.config.window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.config.window_name, self.config.window_width, self.config.window_height)
-        cv2.setMouseCallback(self.config.window_name, self._on_frame_mouse)
-        if self.config.show_debug_window:
-            cv2.namedWindow(self.config.debug_window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(self.config.debug_window_name, self.config.debug_width, self.config.debug_height)
-            cv2.setMouseCallback(self.config.debug_window_name, self._on_debug_mouse)
-        self._print_controls()
-
+        timer_resolution_enabled = _enable_windows_timer_resolution(self.config.windows_timer_resolution_ms)
         try:
+            cv2.namedWindow(self.config.window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.config.window_name, self.config.window_width, self.config.window_height)
+            cv2.setMouseCallback(self.config.window_name, self._on_frame_mouse)
+            if self.config.show_debug_window:
+                cv2.namedWindow(self.config.debug_window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(self.config.debug_window_name, self.config.debug_width, self.config.debug_height)
+                cv2.setMouseCallback(self.config.debug_window_name, self._on_debug_mouse)
+            self._print_controls()
             while not self.quit_requested:
                 if (self.continuous and not self.paused) or self.frame_step_requested:
                     self.frame_step_requested = False
@@ -180,6 +181,8 @@ class FullTestRunner:
             cv2.destroyWindow(self.config.window_name)
             if self.config.show_debug_window:
                 cv2.destroyWindow(self.config.debug_window_name)
+            if timer_resolution_enabled:
+                _disable_windows_timer_resolution(self.config.windows_timer_resolution_ms)
 
     def _advance_one_frame(self) -> bool:
         frame = self.source.read()
@@ -330,6 +333,7 @@ class FullTestRunner:
                     box=_fmt_box(output.box if output else None),
                 )
             )
+        lines.append(_debug_timing_line(self.debug_history[-1] if self.debug_history else None))
         if self.config.draw_key_help:
             lines.append("space pause | c continuous | n next | i init ROI | r save+reset | b restore | q quit")
         return lines
@@ -423,13 +427,7 @@ class FullTestRunner:
                     reason=getattr(snapshot, "decision_reason", ""),
                 )
             )
-            lines.append(
-                "timing predictor.predict={predict:.2f}ms matcher.match={matcher:.2f}ms predictor.update={update:.2f}ms".format(
-                    predict=float(getattr(snapshot, "predictor_predict_ms", 0.0)),
-                    matcher=float(getattr(snapshot, "matcher_match_ms", 0.0)),
-                    update=float(getattr(snapshot, "predictor_update_ms", 0.0)),
-                )
-            )
+            lines.append(_debug_timing_line(snapshot))
         return lines
 
     def _log_frame(self, frame: Frame, update_ms: float) -> None:
@@ -622,6 +620,37 @@ def _score_at(scores: Tuple[float, ...], index: int) -> float:
 
 def _clamp_alpha(alpha: float) -> float:
     return max(0.0, min(1.0, float(alpha)))
+
+
+def _debug_timing_line(snapshot: object | None) -> str:
+    if snapshot is None:
+        return "timing predictor.predict=n/a matcher.match=n/a predictor.update=n/a"
+    return "timing predictor.predict={predict:.2f}ms matcher.match={matcher:.2f}ms predictor.update={update:.2f}ms".format(
+        predict=float(getattr(snapshot, "predictor_predict_ms", 0.0)),
+        matcher=float(getattr(snapshot, "matcher_match_ms", 0.0)),
+        update=float(getattr(snapshot, "predictor_update_ms", 0.0)),
+    )
+
+
+def _enable_windows_timer_resolution(milliseconds: int) -> bool:
+    """Request a finer Windows scheduler period for responsive 1 ms waitKey polling."""
+    if int(milliseconds) <= 0:
+        return False
+    try:
+        import ctypes
+
+        return ctypes.windll.winmm.timeBeginPeriod(int(milliseconds)) == 0
+    except (AttributeError, OSError):
+        return False
+
+
+def _disable_windows_timer_resolution(milliseconds: int) -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.winmm.timeEndPeriod(int(milliseconds))
+    except (AttributeError, OSError):
+        pass
 
 
 def _frame_log_record(frame: Frame) -> dict[str, object]:
