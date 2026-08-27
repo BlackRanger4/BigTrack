@@ -48,7 +48,7 @@ class _FakePredictor:
             self.state = replace(request.predictor_state, uncertainty=0.0)
         else:
             self.state = replace(request.predictor_state, uncertainty=request.predictor_state.uncertainty + 1.0)
-        return PredictorUpdateOutput(ok=True)
+        return PredictorUpdateOutput(ok=True, predictor_state=self.state)
 
     def reset(self):
         self.state = None
@@ -94,6 +94,25 @@ class _FakeMatcher:
 
 
 class ScoreGatedBigTrackTest(unittest.TestCase):
+    def test_debug_snapshot_contains_post_update_state_and_stage_timings(self) -> None:
+        predictor = _FakePredictor()
+        tracker = ScoreGatedBigTrack(
+            predictor=predictor,
+            matcher=_FakeMatcher([((12.0, 10.0, 20.0, 20.0), 0.9)]),
+        )
+        tracker.initialize(BigTrackInitializeInput(frame=_Frame(None, 0, 0.0), box=(10.0, 10.0, 20.0, 20.0)))
+
+        tracker.update(BigTrackUpdateInput(frame=_Frame(None, 1, 1.0)))
+
+        snapshot = tracker.get_debug_snapshot()
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.predictor_pre_update_state.target_pos, (20.0, 20.0))
+        self.assertEqual(snapshot.predictor_post_update_state.target_pos, (22.0, 20.0))
+        self.assertEqual(tracker.get_state().predictor_state, snapshot.predictor_post_update_state)
+        self.assertGreaterEqual(snapshot.predictor_predict_ms, 0.0)
+        self.assertGreaterEqual(snapshot.matcher_match_ms, 0.0)
+        self.assertGreaterEqual(snapshot.predictor_update_ms, 0.0)
+
     def test_good_match_accepts_and_updates_template_on_interval(self) -> None:
         matcher = _FakeMatcher(
             [

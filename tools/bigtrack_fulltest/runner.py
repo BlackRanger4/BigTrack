@@ -389,6 +389,16 @@ class FullTestRunner:
             if predictor_pos is not None:
                 _draw_point_alpha(image, predictor_pos, (255, 80, 80), alpha, 4 if current else 2)
 
+            post_update_state = getattr(snapshot, "predictor_post_update_state", None)
+            if post_update_state is not None:
+                _draw_point_alpha(
+                    image,
+                    post_update_state.target_pos,
+                    (210, 80, 255),
+                    alpha,
+                    4 if current else 2,
+                )
+
             accepted_box = getattr(snapshot, "accepted_box", None)
             if accepted_box is not None:
                 _draw_box_alpha(image, accepted_box, (80, 255, 80), alpha, 2 if current else 1)
@@ -397,16 +407,27 @@ class FullTestRunner:
         snapshot = self.debug_history[-1] if self.debug_history else None
         lines = [
             f"debug frame={frame.idx} history={len(self.debug_history)}",
-            "red=predictor center  orange=prediction-to-match  cyan=matcher bbox/center  green=accepted output",
+            "red=pre-update prediction  purple=post-update predictor  orange=prediction-to-match",
+            "cyan=matcher bbox/center  green=accepted output",
         ]
         if snapshot is not None:
+            post_update_state = getattr(snapshot, "predictor_post_update_state", None)
             lines.append(
-                "pred={pred} vel={vel} matches={count} scores={scores} reason={reason}".format(
+                "pre={pred} vel={vel} post={post} post_vel={post_vel} matches={count} scores={scores} reason={reason}".format(
                     pred=_fmt_pair(getattr(snapshot, "predictor_target_pos")),
                     vel=_fmt_pair(getattr(snapshot, "predictor_target_velocity")),
+                    post=_fmt_pair(post_update_state.target_pos) if post_update_state is not None else "None",
+                    post_vel=_fmt_pair(post_update_state.target_velocity) if post_update_state is not None else "None",
                     count=len(getattr(snapshot, "matcher_bboxes", ())),
                     scores=", ".join(f"{float(score):.2f}" for score in getattr(snapshot, "matcher_scores", ())),
                     reason=getattr(snapshot, "decision_reason", ""),
+                )
+            )
+            lines.append(
+                "timing predictor.predict={predict:.2f}ms matcher.match={matcher:.2f}ms predictor.update={update:.2f}ms".format(
+                    predict=float(getattr(snapshot, "predictor_predict_ms", 0.0)),
+                    matcher=float(getattr(snapshot, "matcher_match_ms", 0.0)),
+                    update=float(getattr(snapshot, "predictor_update_ms", 0.0)),
                 )
             )
         return lines
@@ -423,6 +444,7 @@ class FullTestRunner:
                     "update_ms": update_ms,
                     "tracker_fps": 1000.0 / update_ms if update_ms > 0.0 else None,
                 },
+                "debug": self.debug_history[-1] if self.debug_history else None,
                 "output": self.latest_output,
                 "state": state,
             }
