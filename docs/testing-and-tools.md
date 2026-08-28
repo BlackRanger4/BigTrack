@@ -15,7 +15,7 @@ The suite is also written with `unittest`, so it can run without pytest:
 python -m unittest discover -s tests -v
 ```
 
-On the 2026-08-28 documentation audit, the active interpreter did not have pytest, NumPy, or OpenCV. Unittest discovery ran 62 tests successfully with 26 dependency-based skips. This is an environment snapshot, not a permanent expected count.
+On the 2026-08-28 documentation audit, the active interpreter did not have pytest, NumPy, or OpenCV. Unittest discovery ran 64 tests successfully with 26 dependency-based skips. This is an environment snapshot, not a permanent expected count.
 
 ## Test Module Map
 
@@ -31,6 +31,7 @@ On the 2026-08-28 documentation audit, the active interpreter did not have pytes
 - `test_mixformerv2_matcher.py`: fake backend lifecycle, fixed/adaptive templates, match immutability, approved updates, and optional real smoke.
 - `test_predictor_kalman_clamp.py`: time delta, constant-velocity prediction, measurement correction, and rejection uncertainty.
 - `test_predictor_adaptive_kalman.py`: score-aware noise, velocity clamping, reject damping/growth, and clean-accept decay.
+- `test_predictor_matcher_target.py`: no-motion retention of the latest accepted matcher center, rejection, reset, and close.
 - `test_optional_predictors.py`: alpha-beta limits, history bounds, acceleration Kalman behavior, and common predictor contract.
 - `test_predictor_trajectory_evaluation.py`: deterministic multi-scenario predictor regression and report generation.
 - `test_predictor_trajectory_ui.py`: correct future-horizon cache semantics for the UI.
@@ -74,7 +75,7 @@ python tools\run_bigtrack_fulltest.py
 
 `tools/bigtrack_fulltest/app.py` is a Tkinter setup application. It owns three component registries:
 
-- `PREDICTORS`: all five predictors and their config dataclasses.
+- `PREDICTORS`: all six predictors and their config dataclasses.
 - `MATCHERS`: FFT plus four neural wrappers and configs.
 - `POLICIES`: score-gated and simple policies.
 

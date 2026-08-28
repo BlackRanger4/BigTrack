@@ -29,6 +29,9 @@ from BigTracker.predictor_models import (  # noqa: E402
     ConstantAccelerationKalmanPredictorConfig,
     ConstantAccelerationKalmanPredictorModel,
     HistoryPredictorConfig,
+    HistoryPredictorModel,
+    MatcherTargetPredictorConfig,
+    MatcherTargetPredictorModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
 )
@@ -56,6 +59,11 @@ PREDICTORS: dict[str, ComponentSpec] = {
         lambda config: AlphaBetaPredictorModel(config),
     ),
     "history": ComponentSpec("history", HistoryPredictorConfig, lambda config: HistoryPredictorModel(config)),
+    "matcher_target": ComponentSpec(
+        "matcher_target",
+        MatcherTargetPredictorConfig,
+        lambda config: MatcherTargetPredictorModel(config),
+    ),
     "constant_accel_kalman": ComponentSpec(
         "constant_accel_kalman",
         ConstantAccelerationKalmanPredictorConfig,

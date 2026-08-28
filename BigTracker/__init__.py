@@ -12,6 +12,8 @@ from BigTracker.predictor_models import (
     HistoryPredictorModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
+    MatcherTargetPredictorConfig,
+    MatcherTargetPredictorModel,
 )
 from BigTracker.types import (
     BigTrackInitializeInput,
@@ -65,6 +67,8 @@ __all__ = [
     "ImageLike",
     "KalmanPredictorConfig",
     "KalmanPredictorModel",
+    "MatcherTargetPredictorConfig",
+    "MatcherTargetPredictorModel",
     "Matcher",
     "MatcherInitializeInput",
     "MatcherInitializeOutput",

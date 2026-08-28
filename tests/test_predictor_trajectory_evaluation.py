@@ -24,6 +24,8 @@ from BigTracker.predictor_models import (  # noqa: E402
     HistoryPredictorModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
+    MatcherTargetPredictorConfig,
+    MatcherTargetPredictorModel,
 )
 from BigTracker.types import (  # noqa: E402
     PredictorInitializeInput,
@@ -243,6 +245,7 @@ def _format_summary(summary: _MetricSummary) -> str:
 
 def _predictors():
     return {
+        "matcher_target": MatcherTargetPredictorModel(MatcherTargetPredictorConfig()),
         "kalman": KalmanPredictorModel(
             KalmanPredictorConfig(
                 process_noise_position=1.2,

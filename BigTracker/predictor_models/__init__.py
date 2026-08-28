@@ -9,6 +9,7 @@ from BigTracker.predictor_models.kalman_accel import (
     ConstantAccelerationKalmanPredictorConfig,
     ConstantAccelerationKalmanPredictorModel,
 )
+from BigTracker.predictor_models.matcher_target import MatcherTargetPredictorConfig, MatcherTargetPredictorModel
 
 
 __all__ = [
@@ -22,4 +23,6 @@ __all__ = [
     "HistoryPredictorModel",
     "KalmanPredictorConfig",
     "KalmanPredictorModel",
+    "MatcherTargetPredictorConfig",
+    "MatcherTargetPredictorModel",
 ]

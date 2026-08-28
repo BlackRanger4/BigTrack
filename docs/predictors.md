@@ -70,6 +70,12 @@ Accepted updates correct all three values from a position measurement through Ka
 
 This model can represent sustained acceleration but has more state and tuning sensitivity than constant-velocity alternatives.
 
+## MatcherTargetPredictorModel
+
+This is the intentional no-motion baseline. `predict()` returns its retained state unchanged: it does not advance time, extrapolate velocity, filter a measurement, adjust uncertainty, or use score. On an accepted policy decision, BigTrack has already replaced `predictor_state.target_pos` with the selected matcher-box center, and `update()` retains that state. On a rejected decision, the policy supplies the unchanged prediction, so the retained position remains the latest accepted matcher center.
+
+The predictor has an empty frozen `MatcherTargetPredictorConfig` solely so it can participate in the standard component registries. It has no model-specific metadata or calibrated uncertainty. It is useful as a simple matcher-only baseline, not for recovering through missed or rejected matches.
+
 ## Choosing a Predictor
 
 - Start with `AdaptiveKalmanPredictorModel` for the most complete current accept/reject behavior.
@@ -77,6 +83,7 @@ This model can represent sustained acceleration but has more state and tuning se
 - Use `AlphaBetaPredictorModel` for minimal computation and transparent gains.
 - Use `HistoryPredictorModel` when recent accepted motion is the desired estimator.
 - Use `ConstantAccelerationKalmanPredictorModel` for paths with sustained acceleration and sufficient tuning data.
+- Use `MatcherTargetPredictorModel` to search at the latest accepted matcher center without motion prediction.
 
 Always tune against representative videos. See [Predictor Trajectory Report](predictor-trajectory-report.md) for the deterministic synthetic baseline and [Development Guide](development.md#adding-a-predictor) before adding a model.
 
@@ -88,6 +95,7 @@ Always tune against representative videos. See [Predictor Trajectory Report](pre
 - `alpha_beta.py`: alpha-beta residual correction.
 - `history.py`: bounded accepted-history velocity estimation.
 - `kalman_accel.py`: constant-acceleration Kalman.
+- `matcher_target.py`: retains the latest accepted matcher center without motion prediction.
 - `__init__.py`: predictor subpackage exports.
 
-All five configs and models are also exported by `BigTracker/__init__.py`. New predictors must update both export layers and the registries described in [Testing and Tools](testing-and-tools.md).
+All six configs and models are also exported by `BigTracker/__init__.py`. New predictors must update both export layers and the registries described in [Testing and Tools](testing-and-tools.md).

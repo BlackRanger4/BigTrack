@@ -25,6 +25,8 @@ from BigTracker.predictor_models import (  # noqa: E402
     HistoryPredictorModel,
     KalmanPredictorConfig,
     KalmanPredictorModel,
+    MatcherTargetPredictorConfig,
+    MatcherTargetPredictorModel,
 )
 from BigTracker.types import (  # noqa: E402
     PredictorInitializeInput,
@@ -94,6 +96,11 @@ class CalculationResult:
 
 
 PREDICTORS = (
+    PredictorSpec(
+        "matcher_target",
+        "#7f7f7f",
+        lambda: MatcherTargetPredictorModel(MatcherTargetPredictorConfig()),
+    ),
     PredictorSpec(
         "kalman",
         "#d62728",

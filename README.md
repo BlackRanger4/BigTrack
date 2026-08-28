@@ -56,6 +56,7 @@ Predictors:
 - `AlphaBetaPredictorModel`
 - `HistoryPredictorModel`
 - `ConstantAccelerationKalmanPredictorModel`
+- `MatcherTargetPredictorModel` (no-motion baseline retaining the latest accepted matcher center)
 
 Matchers:
 
