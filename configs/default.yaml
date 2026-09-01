@@ -1,0 +1,414 @@
+# Default BigTracker component configuration.
+#
+# Paths are relative to the repository root.  `use` selects one entry from
+# each section; the other entries are ready-to-use alternatives.
+
+pipeline:
+  predictor: adaptive_kalman
+  matcher: mixformerv2_288_depth8_score
+  policy: score_gated
+
+predictors:
+  use: adaptive_kalman
+
+  adaptive_kalman:
+    type: adaptive_kalman
+    config:
+      process_noise_position: 1.0
+      measurement_noise_position: 4.0
+      default_covariance: [10.0, 0.0, 0.0, 10.0]
+      adaptive_measurement_noise: true
+      min_measurement_noise_scale: 0.25
+      max_measurement_noise_scale: 3.0
+      min_uncertainty: 0.0
+      max_uncertainty: 100.0
+      reject_uncertainty_growth: 1.5
+      reject_covariance_growth: 1.15
+      reject_velocity_damping: 0.85
+      max_position_velocity: null
+      uncertainty_accept_decay: 0.90
+
+  kalman:
+    type: kalman
+    config:
+      process_noise_position: 1.0
+      measurement_noise_position: 4.0
+      default_covariance: [10.0, 0.0, 0.0, 10.0]
+      reject_uncertainty_growth: 1.5
+      min_uncertainty: 0.0
+      max_uncertainty: 100.0
+
+  alpha_beta:
+    type: alpha_beta
+    config:
+      alpha_position: 0.85
+      beta_position: 0.20
+      max_position_velocity: null
+      max_position_acceleration: null
+      reject_velocity_damping: 0.85
+      reject_uncertainty_growth: 1.0
+      accept_uncertainty_decay: 0.85
+      min_uncertainty: 0.0
+      max_uncertainty: 100.0
+
+  history:
+    type: history
+    config:
+      history_length: 8
+      velocity_window: 4
+      velocity_smoothing: 0.60
+      max_position_velocity: null
+      max_position_acceleration: null
+      reject_velocity_damping: 0.85
+      reject_uncertainty_growth: 1.0
+      accept_uncertainty_decay: 0.90
+      min_uncertainty: 0.0
+      max_uncertainty: 100.0
+
+  matcher_target:
+    type: matcher_target
+    config: {}
+
+  constant_accel_kalman:
+    type: constant_accel_kalman
+    config:
+      process_noise_position: 1.0
+      process_noise_velocity: 0.5
+      process_noise_acceleration: 0.25
+      measurement_noise_position: 4.0
+      default_covariance: [10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0]
+      adaptive_measurement_noise: true
+      min_measurement_noise_scale: 0.25
+      max_measurement_noise_scale: 3.0
+      max_position_velocity: null
+      max_position_acceleration: null
+      reject_velocity_damping: 0.85
+      reject_acceleration_damping: 0.65
+      reject_uncertainty_growth: 1.5
+      reject_covariance_growth: 1.15
+      uncertainty_accept_decay: 0.90
+      min_uncertainty: 0.0
+      max_uncertainty: 100.0
+
+matchers:
+  use: mixformerv2_288_depth8_score
+
+  # No external model files required; useful as a lightweight baseline.
+  fft:
+    type: fft
+    config:
+      template_area_factor: 2.0
+      search_area_factor: 2.5
+      uncertain_search_area_factor: 3.25
+      recovery_search_area_factor: 4.0
+      min_crop_size: 16
+      max_best_templates: 5
+      peak_exclusion_radius: 8
+
+  nanotrack_v1:
+    type: nanotrack
+    config:
+      backend: onnx
+      config_path: ignores/Models/nanotrack/config/configv1.yaml
+      checkpoint_path: ignores/Models/nanotrack/pretrained/nanotrackv1.pth
+      backbone_path: ignores/Models/nanotrack/nanotrackv1/nanotrack_backbone_sim.onnx
+      template_backbone_path: null
+      search_backbone_path: null
+      head_path: ignores/Models/nanotrack/nanotrackv1/nanotrack_head_sim.onnx
+      onnx_provider: cpu
+      device: null
+      max_best_templates: 5
+      context_amount: 0.5
+      exemplar_size: 127
+      instance_size: 255
+      output_size: 16
+      point_stride: 16
+      cls_out_channels: 2
+      penalty_k: 0.148
+      window_influence: 0.462
+      lr: 0.390
+      min_box_size: 10.0
+
+  nanotrack_v2:
+    type: nanotrack
+    config:
+      backend: onnx
+      config_path: ignores/Models/nanotrack/config/configv2.yaml
+      checkpoint_path: ignores/Models/nanotrack/pretrained/nanotrackv2.pth
+      backbone_path: ignores/Models/nanotrack/nanotrackv2/nanotrack_backbone_sim.onnx
+      template_backbone_path: null
+      search_backbone_path: null
+      head_path: ignores/Models/nanotrack/nanotrackv2/nanotrack_head_sim.onnx
+      onnx_provider: cpu
+      device: null
+      max_best_templates: 5
+      context_amount: 0.5
+      exemplar_size: 127
+      instance_size: 255
+      output_size: 16
+      point_stride: 16
+      cls_out_channels: 2
+      penalty_k: 0.150
+      window_influence: 0.490
+      lr: 0.385
+      min_box_size: 10.0
+
+  nanotrack_v3:
+    type: nanotrack
+    config:
+      backend: onnx
+      config_path: ignores/Models/nanotrack/config/configv3.yaml
+      checkpoint_path: ignores/Models/nanotrack/pretrained/nanotrackv3.pth
+      backbone_path: ignores/Models/nanotrack/nanotrackv3/nanotrack_backbone.onnx
+      template_backbone_path: null
+      search_backbone_path: null
+      head_path: ignores/Models/nanotrack/nanotrackv3/nanotrack_head.onnx
+      onnx_provider: cpu
+      device: null
+      max_best_templates: 5
+      context_amount: 0.5
+      exemplar_size: 127
+      instance_size: 255
+      output_size: 15
+      point_stride: 16
+      cls_out_channels: 2
+      penalty_k: 0.138
+      window_influence: 0.455
+      lr: 0.348
+      min_box_size: 10.0
+
+  ostrack_vitb_256_mae_32x4_ep300:
+    type: ostrack
+    config:
+      config_path: ignores/Models/Ostrack/config/vitb_256_mae_32x4_ep300.yaml
+      checkpoint_path: ignores/Models/Ostrack/models/vitb_256_mae_32x4_ep300/OSTrack_ep0300.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  ostrack_vitb_256_mae_ce_32x4_got10k_ep100:
+    type: ostrack
+    config:
+      config_path: ignores/Models/Ostrack/config/vitb_256_mae_ce_32x4_got10k_ep100.yaml
+      checkpoint_path: ignores/Models/Ostrack/models/vitb_256_mae_ce_32x4_got10k_ep100/OSTrack_ep0100.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  ostrack_vitb_384_mae_32x4_ep300:
+    type: ostrack
+    config:
+      config_path: ignores/Models/Ostrack/config/vitb_384_mae_32x4_ep300.yaml
+      checkpoint_path: ignores/Models/Ostrack/models/vitb_384_mae_32x4_ep300/OSTrack_ep0300.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 192
+      search_factor: 5.0
+      search_size: 384
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  ostrack_vitb_384_mae_ce_32x4_ep300:
+    type: ostrack
+    config:
+      config_path: ignores/Models/Ostrack/config/vitb_384_mae_ce_32x4_ep300.yaml
+      checkpoint_path: ignores/Models/Ostrack/models/vitb_384_mae_ce_32x4_ep300/OSTrack_ep0300.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 192
+      search_factor: 5.0
+      search_size: 384
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  ostrack_vitb_384_mae_ce_32x4_got10k_ep100:
+    type: ostrack
+    config:
+      config_path: ignores/Models/Ostrack/config/vitb_384_mae_ce_32x4_got10k_ep100.yaml
+      checkpoint_path: ignores/Models/Ostrack/models/vitb_384_mae_ce_32x4_got10k_ep100/OSTrack_ep0100.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 192
+      search_factor: 5.0
+      search_size: 384
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  litetrack_b6_cae_center_got10k_ep100:
+    type: litetrack
+    config:
+      config_path: ignores/Models/litetrack/config/B6_cae_center_got10k_ep100.yaml
+      checkpoint_path: ignores/Models/litetrack/B6_cae_center_got10k_ep100/LiteTrack_ep0100.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  litetrack_b8_cae_center_all_ep300:
+    type: litetrack
+    config:
+      config_path: ignores/Models/litetrack/config/B8_cae_center_all_ep300.yaml
+      checkpoint_path: ignores/Models/litetrack/B8_cae_center_all_ep300/LiteTrack_ep0300.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  litetrack_b8_cae_center_got10k_ep100:
+    type: litetrack
+    config:
+      config_path: ignores/Models/litetrack/config/B8_cae_center_got10k_ep100.yaml
+      checkpoint_path: ignores/Models/litetrack/B8_cae_center_got10k_ep100/LiteTrack_ep0100.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  litetrack_b9_cae_center_all_ep300:
+    type: litetrack
+    config:
+      config_path: ignores/Models/litetrack/config/B9_cae_center_all_ep300.yaml
+      checkpoint_path: ignores/Models/litetrack/B9_cae_center_all_ep300/LiteTrack_ep0300.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  litetrack_b9_cae_center_got10k_ep100:
+    type: litetrack
+    config:
+      config_path: ignores/Models/litetrack/config/B9_cae_center_got10k_ep100.yaml
+      checkpoint_path: ignores/Models/litetrack/B9_cae_center_got10k_ep100/LiteTrack_ep0100.pth.tar
+      device: cuda
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.0
+      search_size: 256
+      backbone_stride: 16
+      head_type: CENTER
+      score_floor: 0.000001
+      clip_margin: 10.0
+
+  mixformerv2_224_depth4_mlp1_score:
+    type: mixformerv2
+    config:
+      config_path: ignores/Models/mixformerv2/config/224_depth4_mlp1_score.yaml
+      checkpoint_path: ignores/Models/mixformerv2/models/mixformerv2_small.pth.tar
+      device: cuda
+      variant: online
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 112
+      search_factor: 4.5
+      search_size: 224
+      score_floor: 0.000001
+      fallback_match_score: 0.5
+      pred_scores_are_logits: true
+      clip_margin: 10.0
+
+  mixformerv2_288_depth8_score:
+    type: mixformerv2
+    config:
+      config_path: ignores/Models/mixformerv2/config/288_depth8_score.yaml
+      checkpoint_path: ignores/Models/mixformerv2/models/mixformerv2_base.pth.tar
+      device: cuda
+      variant: online
+      max_best_templates: 5
+      template_factor: 2.0
+      template_size: 128
+      search_factor: 4.5
+      search_size: 288
+      score_floor: 0.000001
+      fallback_match_score: 0.5
+      pred_scores_are_logits: true
+      clip_margin: 10.0
+
+policies:
+  use: score_gated
+
+  score_gated:
+    type: score_gated
+    config:
+      th_good: 0.70
+      th_bad: 0.30
+      max_center_error: 0.35
+      max_size_error: 0.50
+      predictor_uncertainty_scale: 10.0
+      recovery_after: 3
+      lost_after: 10
+      template_update_interval: 5
+      template_allow_clipped: false
+
+  simple:
+    type: simple
+    config: {}
+
+runner:
+  config:
+    window_name: BigTracker
+    debug_window_name: BigTracker debug
+    window_width: 1280
+    window_height: 720
+    debug_width: 1280
+    debug_height: 720
+    show_debug_window: true
+    debug_history_length: 3
+    debug_history_min_alpha: 0.08
+    debug_history_max_alpha: 0.60
+    start_paused: true
+    continuous: false
+    frame_delay_ms: 1
+    windows_timer_resolution_ms: 1
+    draw_tracker_box: true
+    draw_key_help: true
+    max_timing_samples: 300
+    log_jsonl: false
+    log_path: logs/bigtrack_fulltest.jsonl
