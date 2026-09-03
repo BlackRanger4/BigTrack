@@ -45,6 +45,9 @@ class RunnerConfig:
     windows_timer_resolution_ms: int = 1
     draw_tracker_box: bool = True
     draw_key_help: bool = True
+    overlay_font_scale: float = 0.46
+    overlay_line_height: int = 19
+    overlay_panel_alpha: float = 0.32
     max_timing_samples: int = 300
     log_jsonl: bool = False
     log_path: str = "logs/bigtrack_fulltest.jsonl"
@@ -305,6 +308,7 @@ class FullTestRunner:
             _draw_overlay(
                 display=display,
                 lines=self._general_lines(frame),
+                config=self.config,
             )
         return display
 
@@ -316,7 +320,7 @@ class FullTestRunner:
             display_size=(self.config.debug_width, self.config.debug_height),
         )
         self._draw_debug_history(display, self.debug_view)
-        _draw_overlay(display, self._debug_lines(frame))
+        _draw_overlay(display, self._debug_lines(frame), config=self.config)
         return display
 
     def _general_lines(self, frame: Frame) -> list[str]:
@@ -600,18 +604,23 @@ def _history_alpha(config: RunnerConfig, index: int, count: int) -> float:
     return minimum + (maximum - minimum) * float(index + 1) / float(max(1, count))
 
 
-def _draw_overlay(display, lines: list[str]) -> None:
+def _draw_overlay(display, lines: list[str], config: RunnerConfig) -> None:
+    """Draw a compact, translucent status panel without hiding the video."""
     cv2 = _require_cv2()
-    line_height = 24
-    panel_height = 16 + line_height * len(lines)
-    cv2.rectangle(display, (8, 8), (display.shape[1] - 8, panel_height), (0, 0, 0), thickness=-1)
+    line_height = max(14, int(config.overlay_line_height))
+    font_scale = max(0.30, float(config.overlay_font_scale))
+    panel_height = 10 + line_height * len(lines)
+    panel = display.copy()
+    cv2.rectangle(panel, (6, 6), (display.shape[1] - 6, panel_height), (0, 0, 0), thickness=-1)
+    alpha = _clamp_alpha(config.overlay_panel_alpha)
+    cv2.addWeighted(panel, alpha, display, 1.0 - alpha, 0.0, display)
     for index, line in enumerate(lines):
         cv2.putText(
             display,
             line,
-            (16, 30 + index * line_height),
+            (12, 22 + index * line_height),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
+            font_scale,
             (255, 255, 255),
             1,
             cv2.LINE_AA,
